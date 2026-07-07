@@ -1,7 +1,11 @@
-# Colab Run-Sheet — ATOM-3D-Priority (CMDP)
+# Kaggle Run-Sheet — ATOM-3D-Priority (CMDP)
 
-Exact commands to train and evaluate the priority models on a Colab GPU. Copy each block into
-its own Colab cell.
+Exact commands to train and evaluate the priority models on a Kaggle GPU notebook. Copy each
+block into its own cell. (Originally written for Colab; Colab still works — only Section 0 and
+the persistence notes differ.)
+
+Code source of truth: **https://github.com/tushar330/UAV** (`main`). Cloning it guarantees the
+2026-07-02 altitude-gradient fix is in the code you train.
 
 > **Golden rule:** every model (2D, 3D-blind, 3D-CMDP, GNN) must be trained at the **same**
 > `--embed-dim` and `--num-layers` (and the config's `H_heads`), and evaluated at those same
@@ -18,22 +22,27 @@ its own Colab cell.
 > which made the altitude head's REINFORCE gradient identically zero: every pre-fix 3D
 > checkpoint has an *untrained* altitude head (stuck at the ~85 m sigmoid init), and ones
 > saved under the (now-reverted) Option D optimizer split won't even load. Before running:
-> 1. **Sync the fixed code to Drive** — `trajectory_decoder.py` must contain `dist.sample()`
->    (not `rsample()`) in the altitude action, and `tenma_trainer.py` must have the single
->    Adam + ExponentialLR actor optimizer (no altitude param group). Verify in Colab:
+> 1. **Train from the GitHub clone (Cell 2), never a stale local copy** —
+>    `trajectory_decoder.py` must contain `dist.sample()` (not `rsample()`) in the altitude
+>    action, and `tenma_trainer.py` must have the single Adam + ExponentialLR actor optimizer
+>    (no altitude param group). Verify in the notebook:
 >    `!grep -n "dist.sample()" atom_3d/models/trajectory_decoder.py` — must print a match.
-> 2. **Delete or archive all old `checkpoints/3d_*.pt` (incl. GNN-3D)** and do **NOT** pass
->    `--resume` into them. The 2D checkpoint is unaffected (no altitude head) and may be kept.
+> 2. **Never `--resume` from a pre-fix 3D checkpoint (incl. GNN-3D)** — untrained altitude
+>    head, and Option D optimizer state fails to load. The 2D checkpoint is unaffected
+>    (no altitude head) and may be reused if you have one.
 > 3. Sanity signal that the fix is live: in the 3D training logs, greedy hover altitude must
 >    MOVE within the first ~50 epochs (in a no-QoS smoke it climbs from ~85 m; under CMDP the
 >    per-class pattern is the Section 3 hypothesis). A flat ~81–85 m altitude = stale code.
 
 ---
 
-## 0. Runtime + setup
+## 0. Runtime + setup (Kaggle)
 
-1. **Runtime → Change runtime type → Hardware accelerator: GPU** (T4 15 GB works at N=200; use
-   L4 24 GB / A100 40 GB for N=500 — see the OOM note at the bottom).
+1. Notebook **Settings (right panel) → Accelerator → GPU P100** (16 GB — fine at N=200; T4 x2
+   also works but the code is single-GPU, so P100 is the better pick).
+2. **Settings → Internet → ON** (needed for the git clone; requires a phone-verified account).
+3. Mind the quota: ~30 GPU-hours/week, 12 h max per session. The `--resume` flow below is how
+   you span a training run across sessions.
 
 ```python
 # Cell 1 — confirm GPU + reduce allocator fragmentation
@@ -43,21 +52,33 @@ import torch; print("CUDA:", torch.cuda.is_available(), torch.cuda.get_device_na
 ```
 
 ```python
-# Cell 2 — mount Drive and cd into the repo root (the folder that CONTAINS the `atom_3d` package)
-from google.colab import drive; drive.mount('/content/drive')
-%cd /content/drive/MyDrive/atom_3d      # <-- adjust to where you put the project
-!ls atom_3d/configs/params.yaml          # sanity: should print the path, not an error
+# Cell 2 — clone the repo (guarantees the fixed code) and cd into it
+%cd /kaggle/working
+!git clone https://github.com/tushar330/UAV.git
+%cd UAV
+!grep -n "dist.sample()" atom_3d/models/trajectory_decoder.py   # MUST print a match (fix is live)
+!ls atom_3d/configs/params.yaml                                  # sanity: repo layout OK
 ```
 
 ```python
-# Cell 3 — dependencies (Colab already ships torch + CUDA)
-!pip -q install "numpy>=1.24" "scipy>=1.10" "pyyaml>=6.0" "matplotlib>=3.7" "tqdm>=4.65"
+# Cell 3 — dependencies (Kaggle already ships torch + CUDA + numpy/scipy/matplotlib)
+!pip -q install "pyyaml>=6.0" "tqdm>=4.65"
 ```
+
+> **Kaggle persistence:** `/kaggle/working` survives only while the session is alive, and is
+> captured into the notebook's Output when you **Save Version**. So (a) checkpoints written to
+> `checkpoints/` during an interactive session are LOST if the session dies before you save or
+> download them; (b) to be safe on long runs, download `checkpoints/*.pt` from the file browser
+> periodically, or Save Version at the end. To continue training in a NEW session: re-run Cells
+> 1–3, upload the previous `.pt` into `checkpoints/` (Add Input → your saved notebook's output,
+> then `!cp /kaggle/input/<slug>/UAV/checkpoints/*.pt checkpoints/`), and re-run the train cell
+> with `--resume`.
 
 > **Memory-safe defaults below: `--N 200 --embed-dim 256 --num-layers 3`.** This is ~12× less
 > activation memory than the old `N=500 / embed-512 / batch-64` recipe that OOM'd a T4 (N² term
-> 6.3× smaller, embed term 2× smaller). If you have an L4/A100, you can raise to `--N 500`
-> and/or `--embed-dim 512` — keep them identical across ALL cells.
+> 6.3× smaller, embed term 2× smaller). Kaggle's P100/T4 (16 GB) handles the N=200 recipe;
+> N=500 needs a 24 GB+ GPU (not available on Kaggle free tier) — keep dims identical across
+> ALL cells regardless.
 
 ---
 
@@ -180,7 +201,8 @@ Superseded by CMDP; keep only if you want the fixed-multiplier ablation. Tag = `
 - **Channel regime:** `params.yaml` has `path_loss_exponent: 3.0` (de-saturated urban/suburban)
   and `wpt_enabled: false` (WPT is dormant, not part of this contribution). Per-class floors are
   high 38 / med 28 / low 0 Mbps. Do not revert these for the priority runs.
-- **Checkpoints persist** under `checkpoints/` on the mounted Drive across sessions.
+- **Checkpoints do NOT persist across Kaggle sessions by themselves** — see the persistence
+  note in Section 0 (download the `.pt` files or Save Version; restore + `--resume` next session).
 - **Quick smoke** before the long runs: append `--N 30 --epochs 5 --batch-size 8 --ckpt-dir /tmp/smoke`
   to a train cell so it finishes in seconds without touching real checkpoints.
 - **Honesty reminder:** the locked claim is *priority-aware 3D meets critical (high-class) QoS at
