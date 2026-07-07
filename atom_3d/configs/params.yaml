@@ -1,0 +1,177 @@
+# ATOM-3D Configuration
+# batch_size reduced to 32 (safe for RTX 3050 4GB VRAM — original 100 caused crash)
+# checkpoint_interval reduced to 25 for safer recovery
+
+scenario:
+  N: 500
+  M: 3
+  area_width: 1000.0
+  area_height: 1000.0
+  data_center:
+    x: 0.0
+    y: 0.0
+    z: 20.0
+
+nodes:
+  Di_min: 0.2
+  Di_max: 1.5
+  zi_min: 0.0
+  zi_max: 50.0
+
+uav:
+  fly_speed_max: 10.0
+  flight_height_fixed: 20.0
+  P_flight: 75.0
+  P_transmit: 0.5
+  P_collect: 0.5
+  P_hover: 50.0
+  E_max: 2000.0
+  C_max: 150.0          # lowered from 500 so capacity/battery force multi-UAV segmentation
+  battery_voltage: 22.2
+  # --- vertical (altitude-change) energy model: E_vert = (m*g/eta)*climb + c_d*descent ---
+  mass_kg: 2.0          # UAV mass m (rotary-wing)
+  motor_efficiency: 0.5 # eta — propulsion/motor efficiency for climb work
+  descent_coeff_cd: 4.0 # c_d — J per metre descended (<< m*g/eta ≈ 39 J/m)
+  # --- WPT (wireless power transfer) — FEATURE-FLAGGED OFF for the priority contribution ---
+  # WPT is NOT part of the current contribution (priority-aware QoS-constrained trajectory
+  # planning). When disabled the trainer adds no charge time/energy (t_e=0) AND skips the
+  # closed-form service-altitude H_s* override, so the decoder's SAMPLED altitude drives
+  # reward directly (a true learned action). The WPT code is retained, not deleted, so the
+  # WPT variant is recoverable by flipping this flag back to true.
+  wpt_enabled: false
+  # Required harvested energy scales with the sensor's data load: E_S = coeff * D_i.
+  # Only used when wpt_enabled: true.
+  E_harvest_coeff_j_per_mb: 2.5e-7   # E_S (J) per MB of data demand
+
+# Rotary-wing propulsion power-speed curve P(V) (Zeng & Zhang 2019). Replaces the
+# constant P_flight / P_hover: hover power = P0+Pi is the EXPENSIVE peak, and each
+# leg flies at the energy-optimal cruise speed V* = argmin P(V)/V. This realism is
+# what activates the dive-to-serve altitude novelty (§2.1, §5a).
+propulsion:
+  P0: 79.86       # blade-profile power in hover (W)
+  Pi: 88.63       # induced power in hover (W)   -> hover power = P0+Pi = 168.49 W
+  U_tip: 120.0    # rotor blade tip speed (m/s)
+  v0: 4.03        # mean rotor induced velocity in hover (m/s)
+  d0: 0.6         # fuselage drag ratio
+  rho: 1.225      # air density (kg/m^3)
+  s: 0.05         # rotor solidity
+  A: 0.503        # rotor disc area (m^2)
+
+mobility_3d:
+  H_min: 20.0
+  H_max: 150.0
+  v_xy_max: 40.0
+  v_z_max: 20.0
+  a_xy_max: 5.0
+  a_z_max: 5.0
+  delta_t: 0.5
+
+# Communication-coverage footprint (Paper B eq. 23e) and per-hover budget
+coverage:
+  beamwidth_deg: 60.0   # theta (half-beamwidth); footprint radius r = (H - z_i) * tan(theta)
+  h_safe: 10.0          # minimum clearance above a served node (m)
+  tau_max: 30.0         # max charge+collect time budget per hover point (s)
+
+# Communication-quality QoS floor and Pareto sweep (energy vs R_min)
+# Achievable per-node rates under this channel (B=2 MHz, sigma=-110 dBm) sit at
+# ~35-44 Mbps for served nodes, so the sweep is placed in that binding band:
+# R_min below ~35e6 serves everyone (flat), above it the QoS floor starts
+# excluding far/high-altitude nodes and forces lower, costlier flight.
+qos:
+  R_min: 0.0                                  # default per-node minimum rate (bits/s); 0 disables
+  R_min_sweep: [0.0, 3.6e+7, 3.9e+7, 4.2e+7, 4.5e+7]   # values to trace the energy-vs-quality frontier
+
+# Primal-dual CMDP solver (run_train.py --cmdp). Per-class QoS dual multipliers
+# replace the fixed reward.lambda_priority penalty; the constraint is the EXISTING
+# per-class QoS floor (satisfaction_c >= target). UNTUNED placeholders for the Colab
+# run — do not treat as tuned values.
+cmdp:
+  dual_lr: 0.05               # eta_lambda — dual-ascent step size
+  dual_init: 0.0              # initial multiplier lambda_c(0)
+  dual_max: 100.0             # projection clamp: lambda_c in [0, dual_max]
+  target_satisfaction: 1.0    # per-class QoS satisfaction target (every served critical node meets R_min)
+
+# --- Priority / criticality model (ATOM-3D-Priority, see docs/APPROACH_PRIORITY.md) ---
+# Each node is drawn into a criticality class. The class sets:
+#   * R_min  — the per-class QoS rate floor (bits/s) the link must clear to serve the node.
+#              STRICT for critical nodes (only met at low altitude/short range -> forces a dive);
+#              LOOSE/zero for low priority (met from any altitude -> never forces a dive).
+#   * weight — importance multiplier w_i in the priority-satisfaction penalty.
+# Serve-all is preserved: ALL data is still collected. Priority only controls the QoS floor
+# and the collection order (freshness). enabled=false => uniform behaviour (Paper-A-equivalent).
+priority:
+  enabled: false
+  classes: [high, medium, low]
+  class_probs: [0.1, 0.3, 0.6]      # fraction of nodes assigned to each class (sums to 1)
+  weights:                          # w_i — importance in the priority penalty
+    high: 5.0
+    medium: 2.0
+    low: 1.0
+  # Per-class QoS floor (bits/s), calibrated to the de-saturated (alpha=3.0) rate band.
+  # At alpha=3 a low close dive (clearance ~15 m) achieves ~44 Mbps and a high hover
+  # ~22 Mbps, so: high floor binds (met only by a low dive -> forces altitude down),
+  # medium binds moderately, low has no floor (served from any altitude).
+  R_min:
+    high: 3.8e+7                    # ~38 Mbps  -> only met by a low, close hover (forces a dive)
+    medium: 2.8e+7                  # ~28 Mbps  -> met at moderate altitude
+    low: 0.0                        # loose: no floor (served from any altitude)
+  collect_order_bonus: true         # schedule high-priority nodes earlier (freshness / low AoI)
+
+channel:
+  bandwidth: 2000000.0
+  noise_power_dbm: -110.0
+  # De-saturated path-loss exponent. Free-space (2.0) leaves SNR in deep log-saturation
+  # (53-71 dB) so altitude barely moves achievable rate (24.7% dynamic range) and the
+  # per-class QoS floors do not bind. alpha=3.0 models urban/suburban LoS-with-shadowing:
+  # the rate band spreads (~86%), so altitude becomes a real QoS-feasibility lever and the
+  # priority contribution emerges. The alpha-sensitivity sweep (experiments/altitude_voi_gate.py)
+  # shows the priority gain is a smooth ~13-19% plateau across alpha in [2.5, 3.5] (no cliff).
+  path_loss_exponent: 3.0
+  reference_distance: 1.0
+  carrier_frequency: 2400000000.0
+
+encoder:
+  L: 3
+  H_heads: 8
+  D_hidden: 512
+  D_ff: 512
+  dropout: 0.1
+  input_dim_2d: 3
+  input_dim_3d: 4
+
+decoder:
+  state_dim_2d: 4
+  state_dim_3d: 5
+  clip_logits: 10.0
+  use_tanh_clipping: true
+
+training:
+  batch_size: 100
+  micro_batch_size: 10
+  epochs: 500
+  lr_actor: 1.0e-5
+  lr_critic: 1.0e-3
+  lr_decay: 0.98
+  max_grad_norm: 1.0
+  seed: 42
+  eval_interval: 10
+  checkpoint_interval: 25
+  num_eval_instances: 100
+
+reward:
+  lambda_weight: 0.7
+  lambda_ablation: [0.3, 0.5, 0.7, 0.9]
+  energy_scale: 1.0e+4       # E_scale — normalises Joules in reward = -E/E_scale - mu*unserved
+  unserved_penalty: 5.0      # mu — penalty per unit unserved fraction (serve-all pressure)
+  # --- priority-weighted quality/freshness penalty (ATOM-3D-Priority) ---
+  # cost = energy/E_scale + mu*unserved + lambda_priority * Σ_i w_i * penalty_i
+  # penalty_i fires when node i is served below its class R_min (quality miss) or late (freshness).
+  lambda_priority: 0.0                          # weight on the priority penalty; 0 = priority off
+  lambda_priority_sweep: [0.0, 0.3, 0.6, 1.0, 2.0]  # traces the energy-vs-priority-quality Pareto
+  freshness_penalty_coeff: 0.0                  # per-unit penalty for late collection of high-priority nodes
+
+paths:
+  checkpoint_dir: "checkpoints/"
+  log_dir: "logs/"
+  figure_dir: "figures/"
+  results_dir: "results/"
