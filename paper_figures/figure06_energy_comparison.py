@@ -35,7 +35,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from common_style import setup_style, COLORS
-from common_plot import save_figure
+from common_plot import save_figure, apply_labels
 
 
 # =============================================================================
@@ -64,6 +64,10 @@ METHOD_STYLE = [
     ("3d_gnn",  "3D-GNN",  "#FB8C00", False),
     ("atom3d",  "ATOM-3D-VoI (Ours)", COLORS["ours"], True),
 ]
+
+# Labels describe whatever actually produced the numbers on disk (the
+# exporter's results_data/labels.json); unchanged in placeholder mode.
+METHOD_STYLE = apply_labels(METHOD_STYLE)
 
 
 # =============================================================================
@@ -164,20 +168,33 @@ def plot_energy_comparison(data):
                         fontsize=8, fontweight="bold" if emph else "normal",
                         color=color if emph else "#333333")
 
-    # "Modest energy increase" brace over the Total group - the companion of
-    # Figure 5's "Largest Improvement" brace (small cost <-> large QoS gain).
-    if "total" in cats:
+    # Axis range follows the data: real energies differ in magnitude from the
+    # placeholder set, so a fixed limit would clip the tallest bars.
+    peak = max(values[key][c] for key, *_ in METHOD_STYLE for c in cats)
+    top = peak * 1.28                      # headroom for the brace + labels
+    brace_y = peak * 1.10
+
+    # Brace over the Total group quantifying our cost against the 2D baseline -
+    # the companion of Figure 5's "Largest Improvement" brace. The wording is
+    # derived from the data, so it stays true whichever way the comparison goes.
+    if "total" in cats and {"atom3d", "2d_auto"} <= set(values):
         ti = cats.index("total")
-        x1, x2, yb, tick = ti - 0.40, ti + 0.40, 84.0, 3.0
-        ax.plot([x1, x1, x2, x2], [yb - tick, yb, yb, yb - tick],
+        ours, base = values["atom3d"]["total"], values["2d_auto"]["total"]
+        delta = (ours - base) / base * 100.0 if base else 0.0
+        verdict = (f"{abs(delta):.0f}% less energy than 2D" if delta < 0
+                   else f"{delta:.0f}% more energy than 2D")
+        x1, x2, tick = ti - 0.40, ti + 0.40, top * 0.033
+        ax.plot([x1, x1, x2, x2],
+                [brace_y - tick, brace_y, brace_y, brace_y - tick],
                 color="0.3", lw=1.3, clip_on=False, zorder=5)
-        ax.text(ti, yb + 2.0, "Modest energy increase", ha="center",
+        ax.text(ti, brace_y + top * 0.02, verdict, ha="center",
                 va="bottom", fontsize=8.5, fontweight="bold", color="0.2",
                 zorder=5)
 
-    # Explicit note tying 3D-GNN's low energy to its low critical QoS (Fig. 5).
-    ax.text(0.015, 0.93,
-            "3D-GNN spends the least energy (stays high, rarely descends)\n"
+    # Note tying the cheapest method to its critical-QoS cost (Fig. 5).
+    cheapest = min(METHOD_STYLE, key=lambda m: values[m[0]]["total"])
+    ax.text(0.015, 0.97,
+            f"{cheapest[1]} spends the least energy (stays high, rarely descends)\n"
             "→ which is why its critical-node QoS is lowest (see Fig. 5).",
             transform=ax.transAxes, ha="left", va="top", fontsize=8,
             style="italic", color="0.35")
@@ -185,8 +202,7 @@ def plot_energy_comparison(data):
     ax.set_xticks(x)
     ax.set_xticklabels([CATEGORY_LABELS[c] for c in cats])
     ax.set_ylabel(f"Energy ({unit})")
-    ax.set_ylim(0, 92)
-    ax.set_yticks([0, 20, 40, 60, 80])
+    ax.set_ylim(0, top)
     ax.set_xlabel("Energy Component")
     ax.set_title(TITLE, fontsize=12, fontweight="bold", pad=30)
     ax.spines[["top", "right"]].set_visible(False)

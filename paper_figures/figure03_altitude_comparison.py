@@ -33,7 +33,7 @@ import matplotlib.pyplot as plt
 import matplotlib.lines as mlines
 
 from common_style import setup_style, COLORS
-from common_plot import save_figure, priority_color
+from common_plot import save_figure, apply_labels, priority_color
 
 
 # =============================================================================
@@ -61,6 +61,10 @@ METHOD_STYLE = [
     ("3d_gnn", "3D-GNN",             "#FB8C00",       1.9, 0.95, 5),
     ("2d_auto", "2D-AUTO",           "#9E9E9E",       1.1, 0.90, 4),
 ]
+
+# Labels describe whatever actually produced the traces on disk
+# (results_data/labels.json); unchanged in placeholder mode.
+METHOD_STYLE = apply_labels(METHOD_STYLE)
 
 DOT_Y = -5.0               # priority dots sit just BELOW the x-axis
 
@@ -243,7 +247,10 @@ def make_figure(data):
     _annotate_one_descent(ax, data)
 
     ax.set_xlim(0, 100)
-    ax.set_ylim(0, 112)
+    # Range follows the flown profile: real cruise altitudes reach the
+    # config's H_max, which a fixed limit would clip.
+    peak = max(float(np.max(t)) for t in data["traces"].values())
+    ax.set_ylim(0, peak * 1.18)
     ax.set_xlabel("Mission Progress (%)")
     ax.set_ylabel("Altitude (m)")
     ax.set_title(TITLE, fontsize=12, fontweight="bold", pad=10)

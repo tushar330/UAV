@@ -91,6 +91,9 @@ def main():
                          "real checkpoints are never overwritten)")
     ap.add_argument("--resume", action="store_true")
     ap.add_argument("--eval-instances", type=int, default=None)
+    ap.add_argument("--export-figure-data", action="store_true",
+                    help="also write paper_figures/results_data/{training_log,dual_variables}.npz "
+                         "so Figures 4 and 11 render this run instead of placeholders")
     args = ap.parse_args()
 
     params = load_params(os.path.abspath(args.config))
@@ -156,6 +159,12 @@ def main():
 
     history = {"reward": [], "actor_loss": [], "critic_loss": [],
                "avg_data": [], "avg_energy": []}
+    # Per-epoch series for the paper figures (Fig. 4 dynamics, Fig. 11 duals).
+    # Recorded every epoch regardless, so enabling the export never changes what
+    # training does — only whether the series is written out at the end.
+    fig_log = {"epoch": [], "reward": [], "actor_loss": [], "critic_loss": [],
+               "violation": []}
+    dual_log: dict = {}
 
     qos_mode = ("cmdp(dual)" if cmdp_on
                 else "on(lambda=%.2f)" % params["reward"].get("lambda_priority", 0.0) if priority_on
@@ -169,6 +178,18 @@ def main():
         b_w, b_r = make_priorities(args.mode, batch_size, N, params, priority_on, seed=seed + epoch)
         stats = trainer.train_step(batch, R_min=R_min, node_weights=b_w, node_rmin=b_r)
         trainer.sched_actor.step(); trainer.sched_critic.step()
+
+        # --- per-epoch series for the paper figures ---
+        fig_log["epoch"].append(epoch)
+        fig_log["reward"].append(stats["reward"])
+        fig_log["actor_loss"].append(stats["actor_loss"])
+        fig_log["critic_loss"].append(stats["critic_loss"])
+        # mean violation across the constrained classes (0.0 when CMDP is off)
+        viol = stats.get("cmdp_violation") or {}
+        fig_log["violation"].append(
+            float(np.mean(list(viol.values()))) if viol else 0.0)
+        for cls, lam in (stats.get("duals") or {}).items():
+            dual_log.setdefault(cls, []).append(float(lam))
 
         if epoch % tcfg["eval_interval"] == 0 or epoch == 1:
             ev = trainer.evaluate(eval_batch, R_min=R_min, greedy=True,
@@ -194,6 +215,20 @@ def main():
 
     torch.save({"sd": trainer.state_dict(), "epoch": epochs}, ckpt_path)
     print(f"[done] checkpoint saved to {ckpt_path}")
+
+    # Optional: publish this run's curves to the paper figures. Import is local
+    # so a normal training run never pays for it (or fails on it).
+    if args.export_figure_data:
+        from .export_figure_data import write_training_log, write_dual_variables
+        print("[export] writing training figure data")
+        write_training_log(fig_log["epoch"], fig_log["reward"], fig_log["actor_loss"],
+                           fig_log["critic_loss"], fig_log["violation"])
+        if dual_log:
+            write_dual_variables(fig_log["epoch"][:len(next(iter(dual_log.values())))],
+                                 dual_log)
+        else:
+            print("  [skip] dual_variables.npz — no CMDP duals in this run "
+                  "(train with --cmdp for Figure 11)")
 
     # Training curves
     if history["reward"]:

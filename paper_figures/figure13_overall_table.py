@@ -31,7 +31,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from common_style import setup_style, COLORS
-from common_plot import save_figure
+from common_plot import save_figure, apply_labels
 
 
 # =============================================================================
@@ -57,6 +57,10 @@ METHODS = [
     ("3d_gnn", "3D-GNN", False),
     ("atom3d", "ATOM-3D-VoI (Ours)", True),
 ]
+
+# Labels describe whatever actually produced the numbers on disk (the
+# exporter's results_data/labels.json); unchanged in placeholder mode.
+METHODS = apply_labels(METHODS)
 
 OURS_ROW_FILL = "#E8F0FE"          # light tint of the method color
 HEADER_FILL = "#F0F0F0"

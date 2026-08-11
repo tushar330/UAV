@@ -16,7 +16,9 @@ independent and compose these primitives however they need.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
+from typing import Sequence
 
 import matplotlib.patches as mpatches
 import matplotlib.lines as mlines
@@ -58,6 +60,51 @@ PRIORITY_LABELS = {
 def priority_color(priority: str) -> str:
     """Return the palette color for a node priority ('high'/'medium'/'low')."""
     return COLORS[priority]
+
+
+# =============================================================================
+# METHOD LABELS (provenance-aware)
+# =============================================================================
+#
+# A figure's method slot keys ("2d_auto", "3d_gnn", "atom3d") are stable, but
+# the *label* must describe whatever actually produced the numbers on disk. The
+# exporter (`atom_3d.experiments.export_figure_data`) writes a sidecar
+# `results_data/labels.json` naming the real source of each slot, so a figure
+# never claims a curve came from a trained policy when a deterministic planner
+# produced it. When no sidecar exists (placeholder mode), the figure's own
+# built-in labels are used unchanged.
+
+LABELS_PATH = Path(__file__).resolve().parent / "results_data" / "labels.json"
+
+
+def method_labels() -> dict:
+    """{slot_key: label} from the exporter's sidecar; empty if absent."""
+    if not LABELS_PATH.exists():
+        return {}
+    try:
+        with open(LABELS_PATH, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+    except (OSError, ValueError):
+        return {}
+    return {k: v.get("label", "") for k, v in (payload.get("methods") or {}).items()
+            if v.get("label")}
+
+
+def apply_labels(method_style: Sequence[tuple], *, index: int = 1) -> list:
+    """Rewrite the label element of a figure's method-style tuples.
+
+    Figures declare `METHOD_STYLE = [(key, label, ...), ...]`; this swaps in the
+    real source label for any slot the exporter reported, leaving the key,
+    color and any other styling untouched.
+    """
+    overrides = method_labels()
+    out = []
+    for entry in method_style:
+        row = list(entry)
+        if row and row[0] in overrides:
+            row[index] = overrides[row[0]]
+        out.append(tuple(row))
+    return out
 
 
 # =============================================================================

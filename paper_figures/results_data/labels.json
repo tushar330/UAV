@@ -1,0 +1,23 @@
+{
+  "methods": {
+    "2d_auto": {
+      "label": "2D-AUTO (47 m)",
+      "source": "per-node NN+2-opt tour at a fixed altitude"
+    },
+    "3d_gnn": {
+      "label": "Blind-3D (greedy cover)",
+      "source": "QoS-blind greedy footprint cover; NOT a trained GNN policy"
+    },
+    "atom3d": {
+      "label": "Strong-Coupled (deterministic)",
+      "source": "QoS-aware coupled planner; NOT the trained CMDP policy"
+    }
+  },
+  "generated_by": "atom_3d.experiments.export_figure_data",
+  "generated_at": "2026-08-11 20:38:10",
+  "city_seeds": [
+    42
+  ],
+  "two_d_altitude_m": 47.41133499145508,
+  "note": "Deterministic planners on the frozen synthetic city. Slots '3d_gnn' and 'atom3d' are NOT learned policies yet - see each slot's 'source'. training_log.npz and dual_variables.npz are intentionally absent until a real CMDP run produces them."
+}

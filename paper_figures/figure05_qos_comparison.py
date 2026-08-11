@@ -30,7 +30,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from common_style import setup_style, COLORS
-from common_plot import save_figure
+from common_plot import save_figure, apply_labels
 
 
 # =============================================================================
@@ -56,6 +56,10 @@ METHOD_STYLE = [
     ("3d_gnn",  "3D-GNN",  "#FB8C00", False),
     ("atom3d",  "ATOM-3D-VoI (Ours)", COLORS["ours"], True),
 ]
+
+# Labels describe whatever actually produced the numbers on disk (the
+# exporter's results_data/labels.json); unchanged in placeholder mode.
+METHOD_STYLE = apply_labels(METHOD_STYLE)
 
 
 # =============================================================================

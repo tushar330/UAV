@@ -329,6 +329,7 @@ class TENMATrainer:
         node_weights: Optional[torch.Tensor] = None,
         node_rmin: Optional[torch.Tensor] = None,
         refine_routing: bool = False,
+        collect_trace: bool = False,
     ) -> Dict[str, np.ndarray]:
         """Turn the decoder plan into per-instance total energy + reward.
 
@@ -338,6 +339,13 @@ class TENMATrainer:
         would be exceeded. When ``use_service_altitude`` is set, each hover's
         altitude is overridden with the energy-optimal H_s* for its served
         cluster (the novel dive-to-serve allocation, §5a). Returns (B,) arrays.
+
+        ``collect_trace`` (default off, so training is byte-for-byte unchanged)
+        additionally returns a ``"trace"`` list with one dict per instance:
+        the ordered hover records (position, altitude, served nodes, UAV index),
+        the per-node achieved rate, and the energy split into flight / hover /
+        comm components. This is what the figure exporter consumes; it is pure
+        instrumentation and never feeds back into the reward.
         """
         B = node_features.shape[0]
         N = node_features.shape[1]
@@ -363,6 +371,7 @@ class TENMATrainer:
         # reference per-class floors from config (class<->floor is bijective here)
         _pr = (self.params.get("priority", {}) or {}).get("R_min", {}) or {}
         hi_floor = float(_pr.get("high", 0.0)); md_floor = float(_pr.get("medium", 0.0))
+        trace: List[dict] = [] if collect_trace else []
 
         for b in range(B):
             xy = nf[b, :, :2]
@@ -433,7 +442,13 @@ class TENMATrainer:
                 e_hover = (self.P_T + self.P_H) * float(t_e_k.sum()) + \
                           (self.P_C + self.P_H) * float(t_c_k.sum())
                 t_hover = float((t_c_k + t_e_k).sum())
-                hovers.append((a_xy, H, kept_idx, t_hover, e_hover, float(dem[kept_idx].sum())))
+                # Same total, split by *what the power is spent on*: holding the
+                # airframe up (P_H) vs running the radio (P_T charging, P_C
+                # collecting). Used only by the trace; e_hover is unchanged.
+                e_hold = self.P_H * float((t_e_k + t_c_k).sum())
+                e_radio = self.P_T * float(t_e_k.sum()) + self.P_C * float(t_c_k.sum())
+                hovers.append((a_xy, H, kept_idx, t_hover, e_hover, float(dem[kept_idx].sum()),
+                               e_hold, e_radio))
 
             # nodes never served (footprint missed them at every hover)
             served_any = np.zeros(N, dtype=bool)
@@ -463,6 +478,10 @@ class TENMATrainer:
 
             # ---- multi-UAV segmentation by capacity + battery ----
             total_energy = 0.0
+            e_flight_sum = 0.0      # trace only: horizontal cruise + climb/descent
+            e_hold_sum = 0.0        # trace only: P_H * hover time
+            e_radio_sum = 0.0       # trace only: P_T/P_C communication
+            hover_records: List[dict] = []
             uav_count = 0
             cur_pos = self.depot.copy(); cur_alt = self.depot_alt
             cur_cap = 0.0; cur_energy = 0.0
@@ -475,7 +494,7 @@ class TENMATrainer:
                 d = float(np.linalg.norm(p0[:2] - p1[:2]))
                 return self.phys2d.compute_flight_energy(d)
 
-            for (a_xy, H, kept_idx, t_hover, e_hover, dem_sum) in hovers:
+            for (a_xy, H, kept_idx, t_hover, e_hover, dem_sum, e_hold, e_radio) in hovers:
                 in_e = leg_energy(cur_pos, cur_alt, a_xy, H)
                 ret_e = leg_energy(a_xy, H, self.depot, self.depot_alt)
                 would_cap = cur_cap + dem_sum
@@ -483,7 +502,9 @@ class TENMATrainer:
 
                 if open_uav and (would_cap > self.C_max or would_energy > self.E_max):
                     # close current UAV: fly home from previous position
-                    total_energy += leg_energy(cur_pos, cur_alt, self.depot, self.depot_alt)
+                    home_e = leg_energy(cur_pos, cur_alt, self.depot, self.depot_alt)
+                    total_energy += home_e
+                    e_flight_sum += home_e
                     uav_count += 1
                     cur_pos = self.depot.copy(); cur_alt = self.depot_alt
                     cur_cap = 0.0; cur_energy = 0.0
@@ -493,11 +514,22 @@ class TENMATrainer:
                 cur_energy += in_e + e_hover
                 cur_cap += dem_sum
                 total_energy += in_e + e_hover
+                e_flight_sum += in_e
+                e_hold_sum += e_hold
+                e_radio_sum += e_radio
+                if collect_trace:
+                    hover_records.append({
+                        "x": float(a_xy[0]), "y": float(a_xy[1]), "altitude": float(H),
+                        "uav": uav_count, "served": kept_idx.copy(),
+                        "hover_time": float(t_hover), "demand": float(dem_sum),
+                    })
                 cur_pos = a_xy.copy(); cur_alt = H
                 open_uav = True
 
             if open_uav:
-                total_energy += leg_energy(cur_pos, cur_alt, self.depot, self.depot_alt)
+                home_e = leg_energy(cur_pos, cur_alt, self.depot, self.depot_alt)
+                total_energy += home_e
+                e_flight_sum += home_e
                 uav_count += 1
 
             frac_unserved = unserved / max(N, 1)
@@ -532,12 +564,30 @@ class TENMATrainer:
             data_collected[b] = float(dem[served_any].sum())
             penalties[b] = pen
 
-        return {
+            if collect_trace:
+                trace.append({
+                    "hovers": hover_records,
+                    "rate": rate_arr.copy(),          # (N,) achieved bits/s, 0 if unserved
+                    "served": served_any.copy(),      # (N,) bool
+                    "demand": dem.copy(),             # (N,) MB
+                    "elevation": z.copy(),            # (N,) m
+                    "energy_flight": e_flight_sum,    # cruise + climb/descent (J)
+                    "energy_hover": e_hold_sum,       # airframe hold, P_H (J)
+                    "energy_comm": e_radio_sum,       # radio, P_T/P_C (J)
+                    "energy_total": float(total_energy),
+                    "num_uavs": int(uav_count),
+                    "depot": (float(self.depot[0]), float(self.depot[1]), float(self.depot_alt)),
+                })
+
+        out = {
             "reward": rewards, "energy": energies, "num_uavs": n_uavs,
             "unserved_frac": unserved_fracs, "data_collected": data_collected,
             "priority_penalty": penalties, "priority_satisfaction": prio_sat,
             "high_qos_satisfaction": high_sat, "med_qos_satisfaction": med_sat,
         }
+        if collect_trace:
+            out["trace"] = trace
+        return out
 
     # ------------------------------------------------------------------
     def _lagrangian_reward(self, metrics: Dict[str, np.ndarray]):
