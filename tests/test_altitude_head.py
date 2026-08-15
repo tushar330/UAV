@@ -90,6 +90,28 @@ def test_altitude_clears_the_served_node():
     assert (plan.altitudes[active] <= H_MAX + 1e-3).all()
 
 
+def test_initial_hover_is_qos_feasible():
+    """An untrained policy must start inside the strictest QoS floor.
+
+    At alpha=3 the 38 Mbps critical floor needs the UAV within ~21.1 m of the
+    node. A mid-band initialisation puts the first hover 57-80 m away, and
+    reaching the feasible band takes a 3.4-5.0 sigma excursion the policy never
+    samples -- a 150-epoch smoke run stayed pinned at 0% high-priority QoS
+    because of it. Starting feasible is what makes the reward signal reachable.
+    """
+    dec = make_decoder()
+    for z_val in (5.0, 25.0, 45.0):
+        h_nodes, h_graph, node_xy, node_z, node_demand = make_inputs(
+            z=torch.full((B, N), z_val))
+        plan = dec(h_nodes, h_graph, node_xy, node_z, node_demand, greedy=True)
+        clearance = (plan.altitudes[:, 0] - z_val)
+        assert (clearance <= 21.13).all(), (
+            f"initial hover {clearance.max():.1f} m above a {z_val:.0f} m node "
+            f"exceeds the 21.13 m the 38 Mbps floor allows; the policy starts "
+            f"infeasible and cannot discover the diving reward")
+        assert (clearance >= H_SAFE - 1e-3).all()
+
+
 def test_altitude_head_receives_gradient():
     """The score-function path must actually reach alt_mean.
 

@@ -361,6 +361,47 @@ def hovers_coupled(trainer, instance: CityInstance, chan, *,
     return plan_coupled_strong(*args, restarts=1) if strong else plan_coupled(*args)
 
 
+def hovers_learned(scorer, instance: CityInstance, ckpt_path: str, params: dict):
+    """Hover plan produced by a TRAINED policy, in the planners' own format.
+
+    Returning the same ``(anchor, H, served_idx)`` tuples the deterministic
+    planners emit means the learned policy flows through exactly the same
+    route-ordering, budget and scoring path - so a learned row and a planner row
+    in the same figure are directly comparable, and no separate accounting can
+    drift between them.
+
+    The policy is rebuilt from the architecture stored in its own checkpoint
+    (``cfg``), not from whatever the exporter happens to use for scoring.
+    """
+    sd = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+    cfg = (sd.get("sd", sd)).get("cfg", {})
+    policy = TENMATrainer(params, TrainConfig(
+        mode="3d", encoder=cfg.get("encoder", "attention"),
+        embed_dim=cfg.get("embed_dim", 128), num_heads=cfg.get("num_heads", 8),
+        ff_dim=cfg.get("ff_dim", 128), num_layers=cfg.get("num_layers", 3),
+        priority_feature=cfg.get("priority_feature", True),
+        cmdp=cfg.get("cmdp", True), device="cpu"))
+    policy.load_state_dict(sd)          # refuses pre-fix checkpoints by design
+    apply_city_depot(policy, instance)
+
+    with torch.no_grad():
+        plan, _ = policy._encode_decode(
+            instance.node_features, R_min=0.0, greedy=True,
+            node_rmin=instance.node_rmin, node_weights=instance.node_weights)
+    anchors = plan.anchors.cpu().numpy()[0]
+    altitudes = plan.altitudes.cpu().numpy()[0]
+    served = plan.served.cpu().numpy()[0]
+    active = plan.step_active.cpu().numpy()[0]
+    hovers = []
+    for t in range(len(anchors)):
+        if not active[t]:
+            continue
+        idx = np.flatnonzero(served[t])
+        if idx.size:
+            hovers.append((int(anchors[t]), float(altitudes[t]), idx))
+    return hovers
+
+
 def run_2d_auto(trainer, instance: CityInstance, altitude: float) -> dict:
     """2D-AUTO scored over the whole city (serve-all, no budget)."""
     return _score_hovers(trainer, instance, hovers_2d_auto(instance, altitude))
@@ -730,6 +771,10 @@ def main() -> None:
                          "cover the whole city, e.g. 0.75. Derives the budget "
                          "from the baseline instead of a hand-picked constant, "
                          "so the operating point is stated as a rule.")
+    ap.add_argument("--learned-atom3d", default=None, metavar="CKPT",
+                    help="use a TRAINED policy checkpoint for the 'atom3d' slot "
+                         "instead of the deterministic coupled planner. The slot "
+                         "label and labels.json are updated to say so.")
     ap.add_argument("--hover-cache", default=None,
                     help="pickle path for built hover plans; reused when the "
                          "seed/planner/altitude are unchanged, so budget and "
@@ -769,10 +814,17 @@ def main() -> None:
                   "per-node NN+2-opt tour at a fixed altitude"),
         MethodRun("3d_gnn", "Blind-3D (greedy cover)",
                   "QoS-blind greedy footprint cover; NOT a trained GNN policy"),
-        MethodRun("atom3d", coupled_label,
+        MethodRun("atom3d",
+                  "ATOM-3D-VoI (learned CMDP)" if args.learned_atom3d else coupled_label,
+                  f"trained CMDP policy from {args.learned_atom3d}"
+                  if args.learned_atom3d else
                   "QoS-aware coupled planner; NOT the trained CMDP policy"),
     ]
+    if args.learned_atom3d:
+        print(f"[export] slot 'atom3d' = TRAINED policy {args.learned_atom3d}")
     for key, tag in LEARNED_CHECKPOINTS.items():
+        if key == "atom3d" and args.learned_atom3d:
+            continue
         ckpt = Path(params["paths"]["checkpoint_dir"]) / f"{tag}.pt"
         if ckpt.exists():
             print(f"[export] NOTE: {ckpt} exists but is NOT used for slot '{key}'. "
@@ -801,12 +853,18 @@ def main() -> None:
     for idx, instance in enumerate(instances):
         apply_city_depot(trainer, instance)
         print(f"[export] city seed {seeds[idx]} ...")
-        strength = "fast" if args.fast else "strong"
+        # The cache key must change when the plan's producer changes, or a
+        # deterministic plan would be silently reused for a learned run.
+        strength = (f"learned:{os.path.basename(args.learned_atom3d)}"
+                    if args.learned_atom3d else ("fast" if args.fast else "strong"))
         planners = (
             ("2d_auto", lambda: hovers_2d_auto(instance, two_d_alt)),
             ("3d_gnn", lambda: hovers_blind_3d(trainer, instance, chan)),
-            ("atom3d", lambda: hovers_coupled(trainer, instance, chan,
-                                              strong=not args.fast)),
+            ("atom3d", (lambda: hovers_learned(trainer, instance,
+                                               args.learned_atom3d, params))
+                       if args.learned_atom3d else
+                       (lambda: hovers_coupled(trainer, instance, chan,
+                                               strong=not args.fast))),
         )
         for run, (key, build) in zip(runs, planners):
             t0 = time.time()

@@ -34,6 +34,14 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
+# Initial bias of the altitude head's pre-squash output. sigmoid(-3.5) ~ 0.029,
+# placing the first hover ~13-19 m above its anchor - inside the separation the
+# strictest QoS floor allows - so the policy starts feasible and learns when to
+# climb, rather than starting mid-band and having to find the feasible region
+# 3.4-5.0 sigma out in the tail. See the note in __init__.
+INIT_ALT_LOGIT = -3.5
+
+
 @dataclass
 class DecodePlan:
     """Output of a decoder rollout for a whole batch.
@@ -126,6 +134,29 @@ class TrajectoryDecoder(nn.Module):
                 nn.Linear(embed_dim // 2, 1),
             )
             self.alt_log_std = nn.Parameter(torch.zeros(1) - 0.5)  # std ~ 0.6 initially
+            # Start the policy at the CLOSEST legal approach, not mid-band.
+            #
+            # With a zero-initialised head sigmoid(raw)=0.5 puts the first hover
+            # ~57-80 m above its node, while the strictest QoS floor needs <=21 m
+            # of separation. Reaching that band takes raw ~ -3, which is 3.4-5.0
+            # sigma into the tail of the initial action distribution: the policy
+            # essentially never samples a constraint-satisfying altitude, so it
+            # never sees the reward for diving and the dual just grows forever.
+            # A smoke run confirmed this - high-priority QoS stayed pinned at 0%
+            # for 150 epochs at both 1e-5 and 1e-3.
+            #
+            # Biasing the output here starts every hover ~12-21 m above its node,
+            # inside the critical floor, and lets the policy learn where it can
+            # afford to CLIMB. That matches the measured altitude law (critical
+            # nodes served at H ~ z + h_safe) instead of fighting it.
+            # The final weights start very small (not zero) so the bias sets the
+            # initial altitude while gradient still reaches the layer BELOW:
+            # zeroing this weight makes the earlier layer's gradient identically
+            # zero by the chain rule, which the test suite catches. Default-scale
+            # random weights, on the other hand, pushed some hovers back outside
+            # the feasible band, so neither extreme works.
+            nn.init.normal_(self.alt_mean[-1].weight, mean=0.0, std=1e-3)
+            nn.init.constant_(self.alt_mean[-1].bias, INIT_ALT_LOGIT)
 
     # ------------------------------------------------------------------
     def forward(
