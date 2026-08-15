@@ -90,6 +90,39 @@ def method_labels() -> dict:
             if v.get("label")}
 
 
+def run_regime() -> dict:
+    """Experimental regime the results on disk were produced under.
+
+    Returns {} in placeholder mode. Keys of interest:
+      energy_budget_kj : float or None - the mission budget B, if any.
+      regime           : one-sentence description of the comparison setup.
+
+    A QoS number means something different depending on this: under serve-all
+    with hard QoS constraints every feasible plan scores 100% by construction,
+    whereas under a budget it reports how far the mission got. Figures state
+    which regime they are showing so the two are never read as the same claim.
+    """
+    if not LABELS_PATH.exists():
+        return {}
+    try:
+        with open(LABELS_PATH, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+    except (OSError, ValueError):
+        return {}
+    return {k: payload[k] for k in ("energy_budget_kj", "regime") if k in payload}
+
+
+def budget_footnote() -> str:
+    """One-line statement of the budget regime, or '' if there is none."""
+    info = run_regime()
+    budget = info.get("energy_budget_kj")
+    if not budget:
+        return ""
+    return (f"Equal-budget comparison: every method flies its own route until "
+            f"B = {float(budget):.0f} kJ is spent, so energy is comparable by "
+            f"construction and QoS is what differs.")
+
+
 def apply_labels(method_style: Sequence[tuple], *, index: int = 1) -> list:
     """Rewrite the label element of a figure's method-style tuples.
 

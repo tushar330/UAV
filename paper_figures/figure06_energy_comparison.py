@@ -4,12 +4,16 @@ figure06_energy_comparison.py
 Figure 6 - Energy Consumption Across UAV Policies (companion to Figure 5).
 
 Grouped bar chart of the energy breakdown (Flight / Hover / Communication /
-Total) for the three policies. Message: energy is a COST, not the objective.
-3D-GNN is the cheapest (it stays high and rarely descends) - which is exactly
-why its critical-node QoS is the poorest (Fig. 5). ATOM-3D-VoI spends only a
-modest increment over 2D-AUTO - split across Flight and Hover from its
-selective descend-serve-ascend behaviour - and that increment buys the large
-high-priority QoS gain of Fig. 5. Energy efficiency != QoS performance.
+Total) for the three policies. Message: energy is a COST, not the objective,
+so this figure must always be read together with the critical-QoS result of
+Figure 5 - the cheapest policy is only the better policy if it also meets the
+critical floors.
+
+The in-plot note that states which way that comparison came out is DERIVED
+from the data at draw time (see `qos_note`), never hardcoded. An earlier
+hardcoded version asserted the cheapest method had the poorest critical QoS;
+once real results replaced the placeholders that sentence became false, and
+the figure silently shipped a claim its own data contradicted.
 
 This figure deliberately matches Figure 5's visual style (legend order, bar
 order, colors, spacing, typography) so the two read as companion figures.
@@ -35,7 +39,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from common_style import setup_style, COLORS
-from common_plot import save_figure, apply_labels
+from common_plot import save_figure, apply_labels, run_regime
 
 
 # =============================================================================
@@ -131,6 +135,72 @@ def load_energy_results():
     return generate_placeholder_energy_data()
 
 
+# High-priority QoS per method, used ONLY to phrase the in-plot note (the bars
+# themselves never depend on it). Read from the same results_data archive that
+# Figure 5 plots, so the two figures cannot disagree about which way the
+# energy/QoS comparison came out.
+QOS_DATA_PATH = Path(__file__).resolve().parent / "results_data" / "qos_satisfaction.npz"
+
+
+def load_high_qos():
+    """{method_key: high-priority QoS %} from disk, or None if unavailable.
+
+    Returning None is a normal outcome (placeholder mode, or an export that
+    predates the QoS archive); the caller falls back to a note that claims
+    nothing about QoS.
+    """
+    if not QOS_DATA_PATH.exists():
+        return None
+    z = np.load(QOS_DATA_PATH, allow_pickle=True)
+    classes = [str(c) for c in z["classes"]]
+    if "high" not in classes:
+        return None
+    col = classes.index("high")
+    arr = np.asarray(z["values"], float)
+    return {str(m): float(arr[i, col]) for i, m in enumerate(z["methods"])}
+
+
+def qos_note(values, high_qos):
+    """Phrase the energy-vs-QoS note from the data, never from an assumption.
+
+    Energy efficiency and QoS can come out either way, so the sentence is
+    chosen by comparing them: whichever method is cheapest, the note reports
+    what that actually bought or cost in critical-node QoS.
+    """
+    # Under an equal-budget comparison "who is cheapest" is not the story -
+    # every method is given the same B, so the totals are equal by design and
+    # the only thing that differs is the QoS that budget buys.
+    budget = run_regime().get("energy_budget_kj")
+    if budget and high_qos and {"atom3d", "2d_auto"} <= set(high_qos):
+        totals = [values[k]["total"] for k, *_ in METHOD_STYLE]
+        spread = (max(totals) - min(totals)) / max(max(totals), 1e-9) * 100.0
+        ours = dict((k, lbl) for k, lbl, *_ in METHOD_STYLE)["atom3d"]
+        return (f"Equal budget B = {float(budget):.0f} kJ: all methods spend within "
+                f"{spread:.0f}% of each other.\n"
+                f"At that energy {ours} meets {high_qos['atom3d']:.0f}% of critical-node "
+                f"QoS vs {high_qos['2d_auto']:.0f}% for 2D-AUTO (Fig. 5).")
+
+    cheapest_key, cheapest_label = min(
+        ((k, lbl) for k, lbl, *_ in METHOD_STYLE), key=lambda m: values[m[0]]["total"])
+    if not high_qos or cheapest_key not in high_qos:
+        return (f"{cheapest_label} spends the least total energy.\n"
+                "Read against Fig. 5 for what that costs in critical-node QoS.")
+    best_key = max(high_qos, key=lambda k: high_qos[k])
+    cheapest_qos = high_qos[cheapest_key]
+    leads_on_qos = cheapest_qos >= high_qos[best_key] - 1e-9
+    # Leading on QoS is not the same as satisfying it: a method can top the
+    # field at 12% and still meet no critical floor. Only the first branch may
+    # claim there is no trade-off.
+    if leads_on_qos and cheapest_qos >= 99.0:
+        return (f"{cheapest_label} spends the least energy AND meets every\n"
+                f"critical floor ({cheapest_qos:.0f}%, Fig. 5) - there is no trade-off here.")
+    if leads_on_qos:
+        return (f"{cheapest_label} spends the least energy and leads on critical-node\n"
+                f"QoS, but still meets only {cheapest_qos:.0f}% of it (Fig. 5).")
+    return (f"{cheapest_label} spends the least energy (stays high, rarely descends)\n"
+            f"→ but meets only {cheapest_qos:.0f}% of critical-node QoS (see Fig. 5).")
+
+
 # =============================================================================
 # PLOTTING  (source-agnostic; mirrors figure05 exactly)
 # =============================================================================
@@ -191,11 +261,9 @@ def plot_energy_comparison(data):
                 va="bottom", fontsize=8.5, fontweight="bold", color="0.2",
                 zorder=5)
 
-    # Note tying the cheapest method to its critical-QoS cost (Fig. 5).
-    cheapest = min(METHOD_STYLE, key=lambda m: values[m[0]]["total"])
-    ax.text(0.015, 0.97,
-            f"{cheapest[1]} spends the least energy (stays high, rarely descends)\n"
-            "→ which is why its critical-node QoS is lowest (see Fig. 5).",
+    # Note tying the cheapest method to its critical-QoS outcome (Fig. 5),
+    # phrased from the data so it stays true whichever way the comparison goes.
+    ax.text(0.015, 0.97, qos_note(values, load_high_qos()),
             transform=ax.transAxes, ha="left", va="top", fontsize=8,
             style="italic", color="0.35")
 

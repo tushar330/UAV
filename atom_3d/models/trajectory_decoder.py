@@ -74,6 +74,7 @@ class TrajectoryDecoder(nn.Module):
         tan_theta: float = math.tan(math.radians(60.0)),
         clip_logits: float = 10.0,
         freeze_altitude: Optional[float] = None,
+        h_safe: float = 10.0,
     ):
         super().__init__()
         self.embed_dim = embed_dim
@@ -81,6 +82,7 @@ class TrajectoryDecoder(nn.Module):
         self.dim_3d = dim_3d
         self.H_min = H_min
         self.H_max = H_max
+        self.h_safe = h_safe
         self.fixed_altitude = fixed_altitude
         self.tan_theta = tan_theta
         self.clip_logits = clip_logits
@@ -110,9 +112,17 @@ class TrajectoryDecoder(nn.Module):
         self.start_token = nn.Parameter(torch.randn(embed_dim) * 0.1)
 
         if dim_3d:
-            # Gaussian altitude head: query -> (mean, log_std) of a pre-squash normal.
+            # Gaussian altitude head: (context, CHOSEN ANCHOR) -> pre-squash normal.
+            #
+            # The anchor embedding is an input, not an afterthought. The anchor is
+            # always served at its own hover and the UAV sits directly above it,
+            # so that node's achieved rate depends ONLY on H - z_anchor. A head
+            # fed just the pre-selection glimpse cannot see which anchor was
+            # picked and therefore cannot express H as a function of z_anchor;
+            # the 500-epoch CMDP run collapsed to a constant H = 85.5 +/- 0.14 m
+            # and scored 0% high-priority QoS for exactly this reason.
             self.alt_mean = nn.Sequential(
-                nn.Linear(embed_dim, embed_dim // 2), nn.ReLU(),
+                nn.Linear(2 * embed_dim, embed_dim // 2), nn.ReLU(),
                 nn.Linear(embed_dim // 2, 1),
             )
             self.alt_log_std = nn.Parameter(torch.zeros(1) - 0.5)  # std ~ 0.6 initially
@@ -220,7 +230,12 @@ class TrajectoryDecoder(nn.Module):
                 H = torch.full((B,), float(self.freeze_altitude), device=device)
                 log_p_alt = torch.zeros(B, device=device)
             elif self.dim_3d:
-                mean = self.alt_mean(glimpsed.squeeze(1)).squeeze(1)   # (B,)
+                # Condition on the CHOSEN anchor, not just the pre-selection
+                # glimpse, so the head can set altitude relative to this node.
+                anchor_h = h_nodes.gather(
+                    1, anchor.view(B, 1, 1).expand(B, 1, D)).squeeze(1)   # (B, D)
+                mean = self.alt_mean(
+                    torch.cat([glimpsed.squeeze(1), anchor_h], dim=1)).squeeze(1)
                 std = self.alt_log_std.exp().clamp(0.05, 2.0)
                 dist = torch.distributions.Normal(mean, std)
                 # score-function REINFORCE: the sample must NOT carry gradient,
@@ -228,8 +243,15 @@ class TrajectoryDecoder(nn.Module):
                 # altitude policy gradient is identically zero (audit 2026-07-02).
                 raw = mean if greedy else dist.sample()
                 log_p_alt = dist.log_prob(raw)                    # (B,)
-                # squash to [H_min, H_max]
-                H = self.H_min + (self.H_max - self.H_min) * torch.sigmoid(raw)
+                # Squash into the band that clears THIS anchor: the closest legal
+                # approach (z_anchor + h_safe, the strongest possible link) is the
+                # sigmoid's floor rather than an interior point the policy has to
+                # find by luck. Absolute [H_min, H_max] made the constraint-
+                # satisfying altitude unreachable in practice.
+                z_a = node_z.gather(1, anchor.unsqueeze(1)).squeeze(1)     # (B,)
+                lo = torch.clamp(z_a + self.h_safe, min=self.H_min)
+                hi = torch.clamp(torch.full_like(lo, self.H_max), min=lo + 1e-3)
+                H = lo + (hi - lo) * torch.sigmoid(raw)
             else:
                 H = torch.full((B,), self.fixed_altitude, device=device)
                 log_p_alt = torch.zeros(B, device=device)

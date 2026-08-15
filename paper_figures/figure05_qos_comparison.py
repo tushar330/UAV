@@ -30,7 +30,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from common_style import setup_style, COLORS
-from common_plot import save_figure, apply_labels
+from common_plot import save_figure, apply_labels, budget_footnote
 
 
 # =============================================================================
@@ -153,19 +153,26 @@ def plot_qos_comparison(data):
                         fontsize=8, fontweight="bold" if emph else "normal",
                         color=color if emph else "#333333")
 
-    # "Largest Improvement" brace over the High-priority group.
+    # "Largest Improvement" brace over the High-priority group. Anchored above
+    # the tallest bar in the WHOLE chart, not just the high group: scoping it
+    # to the group left it floating mid-plot whenever another class scored
+    # higher. It must also clear the bar value labels, which sit a few points
+    # above each bar - at 100% those labels collided with a fixed y=100 brace.
+    peak = max(values[key][c] for key, *_ in METHOD_STYLE for c in classes)
     if "high" in classes:
         hi = classes.index("high")
-        x1, x2, yb, tick = hi - 0.40, hi + 0.40, 100.0, 3.0
+        x1, x2, yb, tick = hi - 0.40, hi + 0.40, peak + 9.0, 3.0
         ax.plot([x1, x1, x2, x2], [yb - tick, yb, yb, yb - tick],
                 color="0.3", lw=1.3, clip_on=False, zorder=5)
-        ax.text(hi, yb + 2.0, "Largest Improvement", ha="center", va="bottom",
+        ax.text(hi, yb + 1.5, "Largest Improvement", ha="center", va="bottom",
                 fontsize=8.5, fontweight="bold", color="0.2", zorder=5)
 
     ax.set_xticks(x)
     ax.set_xticklabels([CLASS_LABELS[c] for c in classes])
     ax.set_ylabel("QoS Satisfaction (%)")
-    ax.set_ylim(0, 112)
+    # Headroom for the brace and its caption, without leaving dead space when
+    # nothing reaches 100%.
+    ax.set_ylim(0, max(peak + 20.0, 105.0))
     ax.set_yticks([0, 20, 40, 60, 80, 100])
     ax.set_xlabel("Priority Class")
     ax.set_title(TITLE, fontsize=12, fontweight="bold", pad=30)
@@ -176,7 +183,15 @@ def plot_qos_comparison(data):
     ax.legend(ncol=3, loc="lower center", bbox_to_anchor=(0.5, 1.005),
               frameon=False, fontsize=8.5, columnspacing=1.6, handlelength=1.4)
 
-    fig.subplots_adjust(left=0.09, right=0.975, top=0.86, bottom=0.11)
+    # A QoS percentage means different things in different regimes: under
+    # serve-all with hard QoS constraints it is 100% by construction, under a
+    # budget it reports how far the mission got. State which one this is.
+    footnote = budget_footnote()
+    if footnote:
+        ax.text(0.5, -0.155, footnote, transform=ax.transAxes, ha="center",
+                va="top", fontsize=7.5, style="italic", color="0.4")
+
+    fig.subplots_adjust(left=0.09, right=0.975, top=0.86, bottom=0.17)
     return fig
 
 

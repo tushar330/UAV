@@ -62,11 +62,12 @@ from ..env.city_adapter import (
     PAPER_FIGURES_DIR, PRIORITY_ORDER,
 )
 from ..training import TENMATrainer, TrainConfig
+from ..utils.routing import nn_2opt_tour
 from .heuristic_baseline import _plan_from_steps
 
 # The deterministic planners live in the root-level `experiments` package.
 from experiments.two_stage_vs_coupled import (          # noqa: E402
-    d_max_of, make_channel_consts, plan_coupled, plan_energy_min,
+    d_max_of, make_channel_consts, plan_coupled, plan_energy_min, rate_of,
 )
 from experiments.strong_coupled import plan_coupled_strong  # noqa: E402
 
@@ -98,6 +99,22 @@ LEARNED_CHECKPOINTS = {
 # undefined, so they are placed at this floor: visibly off-scale to the left
 # rather than silently dropped from the distribution.
 UNSERVED_RATE_MBPS = 1e-3
+
+# --- Budget-constrained collection (formulation Q4/Q6) -----------------------
+# Without a budget the formulation is "minimize energy subject to serve-all +
+# per-class QoS as HARD constraints", under which every feasible plan scores
+# 100% on every class by construction -- QoS carries no information and the
+# comparison collapses to energy alone.
+#
+# With a mission energy budget B, no planner can serve everything: each spends
+# ~B (so energy is comparable BY CONSTRUCTION) and they differ in how much QoS
+# that budget buys. That is the axis the contribution is actually about.
+#
+# Per Q6 the baselines are priority-BLIND: 2D-AUTO and Blind-3D fly their own
+# tour order until the budget runs out. Only the priority-aware method reorders
+# its hovers by value, because prioritization IS the method under test - giving
+# the baselines the same reordering would hand them the contribution for free.
+BASELINE_KEYS = ("2d_auto", "3d_gnn")
 
 
 # ---------------------------------------------------------------------------
@@ -173,29 +190,167 @@ def _score_hovers(trainer, instance: CityInstance, hovers) -> dict:
         refine_routing=True, collect_trace=True)
 
 
-def run_2d_auto(trainer, instance: CityInstance, altitude: float) -> dict:
-    """2D-AUTO: NN+2-opt visiting every node individually at one fixed altitude."""
-    n = instance.num_nodes
-    anchors = np.arange(n, dtype=np.int64)[None, :]
-    altitudes = np.full((1, n), altitude, np.float32)
-    served = np.zeros((1, n, n), bool)
-    served[0, np.arange(n), np.arange(n)] = True
-    plan = _plan_from_steps(anchors, altitudes, served, 1, n, n, trainer.device)
-    return trainer._partition_and_evaluate(
-        plan, instance.node_features, R_min=0.0, use_service_altitude=False,
-        node_weights=instance.node_weights, node_rmin=instance.node_rmin,
-        refine_routing=True, collect_trace=True)
+def hover_values(trainer, instance: CityInstance, hovers, chan):
+    """Per-hover (class tier, weighted value) used to spend the budget.
+
+    ``value`` is Σ w_i·D_i·1[QoS met] (Q5): a node contributes only if its link
+    actually clears its own floor, so a hover that "covers" critical nodes too
+    weakly to serve them scores nothing for them.
+
+    ``tier`` is the most critical class the hover actually serves (0=high,
+    1=medium, 2=low/none). Ordering by value ALONE does not prioritize critical
+    nodes: this city has 350 low-priority nodes against 50 high-priority ones,
+    so the low class carries the larger total value mass and a purely
+    value-greedy schedule serves bulk low-priority hovers first. That is the
+    "soft weights are cosmetic" failure mode - the weights never bind. Sorting
+    by tier first makes criticality an ordering constraint rather than a
+    preference, which is what "priority-aware" has to mean here.
+    """
+    nf = instance.node_features.numpy()[0]
+    xy, z, dem = nf[:, :2], nf[:, 2], nf[:, 3]
+    w = instance.node_weights[0].numpy()
+    rmin = instance.node_rmin[0].numpy()
+    tiers = np.full(len(hovers), 2, int)
+    values = np.zeros(len(hovers), float)
+    high_mask = instance.class_mask("high")
+    med_mask = instance.class_mask("medium")
+    for k, (a, H, idx) in enumerate(hovers):
+        idx = np.asarray(idx, int)
+        if idx.size == 0:
+            continue
+        rho = np.linalg.norm(xy[idx] - xy[a], axis=1)
+        d3d = np.sqrt(rho ** 2 + (H - z[idx]) ** 2 + 1e-10)
+        met = rate_of(d3d, chan) >= rmin[idx]
+        values[k] = float((w[idx] * dem[idx] * met).sum())
+        served_ok = idx[met]
+        if high_mask[served_ok].any():
+            tiers[k] = 0
+        elif med_mask[served_ok].any():
+            tiers[k] = 1
+    return tiers, values
 
 
-def run_blind_3d(trainer, instance: CityInstance, chan) -> dict:
+def cached_hovers(cache_path: Optional[str], key: tuple, build):
+    """Build a hover plan, reusing a cached one when the inputs are identical.
+
+    ``plan_coupled_strong`` takes ~23 min at N=500, which otherwise has to be
+    paid again for every change to the budget or the figures - none of which
+    affect the plan itself. The cache key covers everything the plan depends
+    on (method, city seed, planner strength, 2D altitude), so a stale entry
+    cannot be silently reused after those change.
+    """
+    if not cache_path:
+        return build()
+    cache = {}
+    if os.path.exists(cache_path):
+        try:
+            with open(cache_path, "rb") as f:
+                cache = pickle.load(f)
+        except (OSError, EOFError, pickle.UnpicklingError):
+            cache = {}                      # unreadable cache is not fatal
+    if key in cache:
+        print(f"    [cache] reusing {key[0]} plan ({len(cache[key])} hovers)")
+        return cache[key]
+    hovers = build()
+    cache[key] = hovers
+    os.makedirs(os.path.dirname(os.path.abspath(cache_path)) or ".", exist_ok=True)
+    with open(cache_path, "wb") as f:
+        pickle.dump(cache, f, protocol=pickle.HIGHEST_PROTOCOL)
+    return hovers
+
+
+def route_order(trainer, instance: CityInstance, hovers):
+    """Sort hovers into the order the UAV would actually fly them.
+
+    Truncation must happen along the ROUTE, not along whatever order a planner
+    happened to construct its hovers in. 2D-AUTO, for instance, emits one hover
+    per node in node-index order; cutting a prefix of that would hand it an
+    arbitrary set of nodes scattered across the whole city, and routing a
+    scattered set costs far more per node than routing a compact one. That
+    would understate the baseline for a reason that has nothing to do with the
+    method under test. Ordering by the tour first makes a budget cut mean
+    "flew the route until the energy ran out" for every method alike.
+    """
+    if not hovers:
+        return list(hovers)
+    xy = instance.node_features.numpy()[0][:, :2]
+    pts = np.array([xy[a] for a, _H, _idx in hovers], float)
+    depot = np.asarray(trainer.depot, float)[:2]
+    return [hovers[i] for i in nn_2opt_tour(pts, depot)]
+
+
+def fit_to_budget(trainer, instance: CityInstance, hovers, budget_j: float):
+    """Longest prefix of ``hovers`` whose scored mission energy fits ``budget_j``.
+
+    Every candidate is priced by the canonical scorer, so the energy reported
+    for a budgeted mission is the same quantity as an unbudgeted one - the
+    budget selects the plan, it never estimates its cost. Total energy grows
+    with the number of hovers (more stops, longer tour), so the feasible
+    prefixes form a contiguous range and a binary search finds the longest.
+
+    Returns (kept_hovers, metrics) or (None, None) if even one hover overruns.
+    """
+    lo, hi, best = 1, len(hovers), (None, None)
+    while lo <= hi:
+        mid = (lo + hi) // 2
+        metrics = _score_hovers(trainer, instance, hovers[:mid])
+        if float(metrics["energy"][0]) <= budget_j:
+            best = (hovers[:mid], metrics)
+            lo = mid + 1
+        else:
+            hi = mid - 1
+    return best
+
+
+def apply_budget(trainer, instance: CityInstance, key: str, hovers, chan,
+                 budget_j: float, *, priority_schedule: bool = False):
+    """Fly ``hovers`` until the budget runs out.
+
+    Default: EVERY method flies its own planner's route order and stops when B
+    is spent. No method is reordered, so none is handed an advantage the others
+    do not get, and the comparison isolates what each planner's hover PLACEMENT
+    delivers per joule. This is the regime the figures use.
+
+    ``priority_schedule`` is the alternative: serve the critical class first.
+    It drives critical QoS to 100% (the planner can cover all 50 high-priority
+    nodes cheaply) but starves bulk coverage at tight budgets, so it answers a
+    different question - scheduling rather than placement - and is kept as a
+    secondary result rather than the headline.
+    """
+    ordered = route_order(trainer, instance, hovers)
+    if priority_schedule and key not in BASELINE_KEYS:
+        tiers, values = hover_values(trainer, instance, ordered, chan)
+        # Critical class first, then most value per stop within a class.
+        ordered = [ordered[i] for i in np.lexsort((-values, tiers))]
+    kept, metrics = fit_to_budget(trainer, instance, ordered, budget_j)
+    if kept is None:
+        raise ValueError(f"budget {budget_j/1e3:.0f} kJ too small for a single "
+                         f"'{key}' hover")
+    print(f"    {key:8s} budget-fit: {len(kept):4d}/{len(ordered):4d} hovers, "
+          f"{float(metrics['energy'][0])/1e3:6.1f} kJ")
+    return metrics
+
+
+def hovers_2d_auto(instance: CityInstance, altitude: float):
+    """2D-AUTO hovers: one per node, directly overhead, at one fixed altitude.
+
+    The altitude has to clear the tallest structure in the city by ``h_safe``,
+    because a fixed-altitude tour flies the same height everywhere. On this
+    city that is 47.4 m, which is far above the 21.1 m slant range the 38 Mbps
+    critical floor needs - a single altitude cannot both clear the skyline and
+    hold a strong uplink, and that trade is the baseline's defining weakness.
+    """
+    return [(i, altitude, np.array([i])) for i in range(instance.num_nodes)]
+
+
+def hovers_blind_3d(trainer, instance: CityInstance, chan):
     """Priority-blind greedy footprint cover: 3D, altitude varies, QoS ignored."""
     nf = instance.node_features.numpy()[0]
-    hovers = plan_energy_min(trainer, nf[:, :2], nf[:, 2], nf[:, 3], ALTITUDE_GRID, chan)
-    return _score_hovers(trainer, instance, hovers)
+    return plan_energy_min(trainer, nf[:, :2], nf[:, 2], nf[:, 3], ALTITUDE_GRID, chan)
 
 
-def run_coupled(trainer, instance: CityInstance, chan, *,
-                strong: bool, rmin_override: Optional[np.ndarray] = None) -> dict:
+def hovers_coupled(trainer, instance: CityInstance, chan, *,
+                   strong: bool, rmin_override: Optional[np.ndarray] = None):
     """QoS-aware coupled planner (optionally with continuous-altitude local search)."""
     nf = instance.node_features.numpy()[0]
     xy, z, dem = nf[:, :2], nf[:, 2], nf[:, 3]
@@ -203,8 +358,22 @@ def run_coupled(trainer, instance: CityInstance, chan, *,
     dmax = d_max_of(rmin, chan)
     args = (trainer, xy, z, dem, rmin, ALTITUDE_GRID, chan,
             trainer.H_min, trainer.H_max, trainer.h_safe, dmax)
-    hovers = plan_coupled_strong(*args, restarts=1) if strong else plan_coupled(*args)
-    return _score_hovers(trainer, instance, hovers)
+    return plan_coupled_strong(*args, restarts=1) if strong else plan_coupled(*args)
+
+
+def run_2d_auto(trainer, instance: CityInstance, altitude: float) -> dict:
+    """2D-AUTO scored over the whole city (serve-all, no budget)."""
+    return _score_hovers(trainer, instance, hovers_2d_auto(instance, altitude))
+
+
+def run_blind_3d(trainer, instance: CityInstance, chan) -> dict:
+    return _score_hovers(trainer, instance, hovers_blind_3d(trainer, instance, chan))
+
+
+def run_coupled(trainer, instance: CityInstance, chan, *,
+                strong: bool, rmin_override: Optional[np.ndarray] = None) -> dict:
+    return _score_hovers(trainer, instance, hovers_coupled(
+        trainer, instance, chan, strong=strong, rmin_override=rmin_override))
 
 
 # ---------------------------------------------------------------------------
@@ -551,6 +720,23 @@ def main() -> None:
     # floor at h_safe); write_pareto drops anything above it anyway.
     ap.add_argument("--pareto-scales", default="0.0,0.25,0.5,0.75,1.0,1.15")
     ap.add_argument("--skip-pareto", action="store_true")
+    ap.add_argument("--energy-budget-kj", type=float, default=None,
+                    help="mission energy budget B (kJ). Without it the run is "
+                         "serve-all, under which every feasible plan scores "
+                         "100%% QoS by construction; with it each method spends "
+                         "~B and they are compared on the QoS that budget buys.")
+    ap.add_argument("--budget-frac-of-2d", type=float, default=None,
+                    help="set B as this fraction of the energy 2D-AUTO needs to "
+                         "cover the whole city, e.g. 0.75. Derives the budget "
+                         "from the baseline instead of a hand-picked constant, "
+                         "so the operating point is stated as a rule.")
+    ap.add_argument("--hover-cache", default=None,
+                    help="pickle path for built hover plans; reused when the "
+                         "seed/planner/altitude are unchanged, so budget and "
+                         "figure iterations skip the ~23 min Strong-Coupled plan")
+    ap.add_argument("--priority-schedule", action="store_true",
+                    help="serve the critical class first under budget "
+                         "(secondary result; see apply_budget)")
     args = ap.parse_args()
 
     params = yaml.safe_load(open(os.path.abspath(args.config)))
@@ -589,21 +775,50 @@ def main() -> None:
     for key, tag in LEARNED_CHECKPOINTS.items():
         ckpt = Path(params["paths"]["checkpoint_dir"]) / f"{tag}.pt"
         if ckpt.exists():
-            print(f"[export] NOTE: {ckpt} exists - slot '{key}' can be upgraded "
-                  f"to the learned policy (not yet wired; deterministic used).")
+            print(f"[export] NOTE: {ckpt} exists but is NOT used for slot '{key}'. "
+                  f"Checkpoints trained before the altitude head became "
+                  f"anchor-conditioned are invalid (constant H, 0% high-priority "
+                  f"QoS) and the trainer now refuses to load them; a deterministic "
+                  f"planner is used until a retrained policy exists.")
+
+    budget_j = None if args.energy_budget_kj is None else args.energy_budget_kj * 1e3
+    if args.budget_frac_of_2d is not None:
+        # State the operating point as a rule tied to the baseline's own cost,
+        # rather than a constant chosen after seeing the outcome.
+        apply_city_depot(trainer, instances[0])
+        full_2d = _score_hovers(trainer, instances[0],
+                                hovers_2d_auto(instances[0], two_d_alt))
+        base_j = float(full_2d["energy"][0])
+        budget_j = args.budget_frac_of_2d * base_j
+        args.energy_budget_kj = budget_j / 1e3
+        print(f"[export] B = {args.budget_frac_of_2d:.2f} x 2D-AUTO's full-city cost "
+              f"({base_j/1e3:.1f} kJ) = {budget_j/1e3:.1f} kJ")
+    if budget_j is not None:
+        print(f"[export] BUDGET mode: B = {args.energy_budget_kj:.0f} kJ per mission "
+              f"(Q4/Q6). Every method flies until B is spent, so energy is "
+              f"comparable by construction and QoS is the comparison.")
 
     for idx, instance in enumerate(instances):
         apply_city_depot(trainer, instance)
         print(f"[export] city seed {seeds[idx]} ...")
-        t0 = time.time()
-        runs[0].metrics.append(run_2d_auto(trainer, instance, two_d_alt))
-        print(f"    2D-AUTO        {time.time() - t0:6.1f}s")
-        t0 = time.time()
-        runs[1].metrics.append(run_blind_3d(trainer, instance, chan))
-        print(f"    Blind-3D       {time.time() - t0:6.1f}s")
-        t0 = time.time()
-        runs[2].metrics.append(run_coupled(trainer, instance, chan, strong=not args.fast))
-        print(f"    {coupled_label.split(' (')[0]:14s} {time.time() - t0:6.1f}s")
+        strength = "fast" if args.fast else "strong"
+        planners = (
+            ("2d_auto", lambda: hovers_2d_auto(instance, two_d_alt)),
+            ("3d_gnn", lambda: hovers_blind_3d(trainer, instance, chan)),
+            ("atom3d", lambda: hovers_coupled(trainer, instance, chan,
+                                              strong=not args.fast)),
+        )
+        for run, (key, build) in zip(runs, planners):
+            t0 = time.time()
+            hovers = cached_hovers(
+                args.hover_cache,
+                (key, seeds[idx], strength, round(float(two_d_alt), 3)), build)
+            metrics = (_score_hovers(trainer, instance, hovers) if budget_j is None
+                       else apply_budget(trainer, instance, key, hovers, chan,
+                                         budget_j,
+                                         priority_schedule=args.priority_schedule))
+            run.metrics.append(metrics)
+            print(f"    {key:8s}       {time.time() - t0:6.1f}s")
         for run in runs:
             run.traces.append(run.metrics[-1]["trace"][0])
 
@@ -627,13 +842,23 @@ def main() -> None:
     if not args.skip_pareto:
         apply_city_depot(trainer, instances[0])
         write_pareto(trainer, instances, chan, runs, scales, args.fast)
+    regime = ("budget-constrained (Q4/Q6): every method flies until the mission "
+              f"energy budget B = {args.energy_budget_kj:.0f} kJ is spent, so energy is "
+              "comparable by construction and the comparison is the QoS that "
+              "budget buys. QoS below 100% means the budget ran out, not that a "
+              "constraint was violated."
+              if budget_j is not None else
+              "serve-all with per-class QoS as HARD constraints: every feasible "
+              "plan scores 100% on every class BY CONSTRUCTION, so QoS carries "
+              "no comparative information in this regime.")
     write_labels(runs, extra={
         "city_seeds": seeds,
         "two_d_altitude_m": two_d_alt,
+        "energy_budget_kj": args.energy_budget_kj,
+        "regime": regime,
         "note": ("Deterministic planners on the frozen synthetic city. Slots "
                  "'3d_gnn' and 'atom3d' are NOT learned policies yet - see "
-                 "each slot's 'source'. training_log.npz and dual_variables.npz "
-                 "are intentionally absent until a real CMDP run produces them."),
+                 "each slot's 'source'."),
     })
     print("\n[export] done. Figures 3, 5, 6, 7, 8, 9, 10, 13 now load real data.")
     print("         Figures 4, 11, 12 keep their PLACEHOLDER stamp (need training).")
