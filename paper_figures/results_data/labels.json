@@ -14,12 +14,28 @@
     }
   },
   "generated_by": "atom_3d.experiments.export_figure_data",
-  "generated_at": "2026-08-15 15:59:51",
+  "generated_at": "2026-08-15 21:14:49",
   "city_seeds": [
-    42
+    42,
+    43,
+    44,
+    45,
+    46
   ],
   "two_d_altitude_m": 47.41133499145508,
+  "two_d_altitude_m_per_seed": {
+    "42": 47.41133499145508,
+    "43": 49.23577117919922,
+    "44": 49.594566345214844,
+    "45": 49.28696060180664,
+    "46": 48.254886627197266
+  },
   "energy_budget_kj": 82.65323828125,
   "regime": "budget-constrained (Q4/Q6): every method flies until the mission energy budget B = 83 kJ is spent, so energy is comparable by construction and the comparison is the QoS that budget buys. QoS below 100% means the budget ran out, not that a constraint was violated.",
+  "class_floors_bps": {
+    "high": 38000000.0,
+    "medium": 32500000.0,
+    "low": 29000000.0
+  },
   "note": "Deterministic planners on the frozen synthetic city. Slots '3d_gnn' and 'atom3d' are NOT learned policies yet - see each slot's 'source'."
 }
