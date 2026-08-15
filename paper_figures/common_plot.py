@@ -112,6 +112,25 @@ def run_regime() -> dict:
     return {k: payload[k] for k in ("energy_budget_kj", "regime") if k in payload}
 
 
+def class_floors_mbps() -> dict:
+    """{class: floor in Mbps} the results were actually scored against.
+
+    Empty when absent (placeholder mode, or an export predating the field), in
+    which case a figure keeps its own defaults. Reading the floors from the
+    export stops a figure from labelling a bar with a floor the data was not
+    measured against - the shipped 38/25/8 were recalibrated once already.
+    """
+    if not LABELS_PATH.exists():
+        return {}
+    try:
+        with open(LABELS_PATH, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+    except (OSError, ValueError):
+        return {}
+    floors = payload.get("class_floors_bps") or {}
+    return {k: float(v) / 1e6 for k, v in floors.items()}
+
+
 def budget_footnote() -> str:
     """One-line statement of the budget regime, or '' if there is none."""
     info = run_regime()

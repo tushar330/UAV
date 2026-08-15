@@ -81,13 +81,22 @@ RESULTS_DATA_DIR = PAPER_FIGURES_DIR / "results_data"
 # [H_min, H_max] band so a planner can choose a deep dive or a wide high hover.
 ALTITUDE_GRID: Tuple[float, ...] = (30, 45, 60, 80, 100, 120, 140)
 
-# Per-class QoS floors are read from the city itself (each IoTNode carries its
-# own required_rate). The scorer, however, derives its per-class satisfaction
-# masks from `priority.R_min` in params.yaml, which drifted from the city
-# (config says medium=28 Mbps, the city says 25). We override that mapping
-# IN MEMORY so the masks line up; params.yaml on disk is never touched, so no
-# training run is affected.
-CITY_CLASS_FLOORS = {"high": 38e6, "medium": 25e6, "low": 8e6}
+# Per-class QoS floors, RECALIBRATED so that all three actually bind.
+#
+# The city pickle ships 38/25/8 Mbps. At alpha=3 those map to maximum slant
+# distances of 21.1 / 94.9 / 690.9 m, and on a 1000 m map a 690 m reach can
+# never fail: the low-priority floor is unsatisfiable to violate, so its bar
+# measured footprint coverage rather than QoS, and medium only bound at the
+# edge of a high hover's cone. Only the critical class exercised a constraint.
+#
+# Rate is compressed (rate ~ log(1/d^3)), so the whole usable band is 25-44
+# Mbps; these values space the three classes evenly across it:
+#     high 38.0 -> 21 m      medium 32.5 -> 40 m      low 29.0 -> 60 m
+# Applied to the city instances via `city_adapter.build_instance(class_floors=)`
+# and to the scorer's class masks below, so both halves agree. `synthetic_city`
+# and its pickle stay locked; params.yaml on disk is never touched, so no
+# training run is affected by an export.
+CITY_CLASS_FLOORS = {"high": 38.0e6, "medium": 32.5e6, "low": 29.0e6}
 
 # Figure slot -> checkpoint tag that would upgrade it to a learned result.
 LEARNED_CHECKPOINTS = {
@@ -792,7 +801,11 @@ def main() -> None:
     scales = [float(s) for s in args.pareto_scales.split(",") if s.strip()]
 
     print(f"[export] city realizations: {seeds}")
-    instances = build_instances_for_seeds(seeds)
+    # The recalibrated floors must reach the INSTANCES too, not just the
+    # scorer's class masks: satisfaction is measured against each node's own
+    # node_rmin, so leaving the pickle's floors here would score against one
+    # set of floors while planning against another.
+    instances = build_instances_for_seeds(seeds, class_floors=CITY_CLASS_FLOORS)
     print(f"[export] classes: {class_counts(instances[0])}")
 
     trainer = build_trainer(params, instances[0])
@@ -801,10 +814,20 @@ def main() -> None:
     # 2D-AUTO cruise altitude: the lowest that clears the tallest structure with
     # the spec's safety margin. Derived from the city, not hard-coded, so it
     # adapts if the environment changes.
-    tallest = max(float(i.node_features[0, :, 2].max()) for i in instances)
-    two_d_alt = tallest + trainer.h_safe
-    print(f"[export] 2D cruise altitude = {two_d_alt:.1f} m "
-          f"(tallest structure {tallest:.1f} m + h_safe {trainer.h_safe:.0f} m)")
+    #
+    # PER REALIZATION, not a single altitude across all of them. Each seed is an
+    # independent city, so a 2D system deployed there clears THAT skyline; using
+    # the global maximum would make every city pay for the tallest building in
+    # any of them. It is not a large difference here (37.4-39.6 m) but it is
+    # free, and it costs the baseline real QoS: at seed 42 the own-city 47.4 m
+    # meets the critical floor for 8% of high-priority nodes while the global
+    # 49.6 m meets it for 0%.
+    two_d_alts = [float(i.node_features[0, :, 2].max()) + trainer.h_safe
+                  for i in instances]
+    two_d_alt = two_d_alts[0]          # canonical scene, used for labels/budget
+    print("[export] 2D cruise altitude per seed: "
+          + ", ".join(f"{s}:{a:.1f} m" for s, a in zip(seeds, two_d_alts))
+          + f" (tallest structure + h_safe {trainer.h_safe:.0f} m)")
     trainer.fixed_alt = two_d_alt
 
     coupled_label = ("Coupled-Greedy (deterministic)" if args.fast
@@ -852,13 +875,16 @@ def main() -> None:
 
     for idx, instance in enumerate(instances):
         apply_city_depot(trainer, instance)
+        # The scorer fills any unspecified hover altitude from fixed_alt, so it
+        # has to track this realization's own cruise altitude too.
+        trainer.fixed_alt = two_d_alts[idx]
         print(f"[export] city seed {seeds[idx]} ...")
         # The cache key must change when the plan's producer changes, or a
         # deterministic plan would be silently reused for a learned run.
         strength = (f"learned:{os.path.basename(args.learned_atom3d)}"
                     if args.learned_atom3d else ("fast" if args.fast else "strong"))
         planners = (
-            ("2d_auto", lambda: hovers_2d_auto(instance, two_d_alt)),
+            ("2d_auto", lambda: hovers_2d_auto(instance, two_d_alts[idx])),
             ("3d_gnn", lambda: hovers_blind_3d(trainer, instance, chan)),
             ("atom3d", (lambda: hovers_learned(trainer, instance,
                                                args.learned_atom3d, params))
@@ -870,7 +896,7 @@ def main() -> None:
             t0 = time.time()
             hovers = cached_hovers(
                 args.hover_cache,
-                (key, seeds[idx], strength, round(float(two_d_alt), 3)), build)
+                (key, seeds[idx], strength, round(float(two_d_alts[idx]), 3)), build)
             metrics = (_score_hovers(trainer, instance, hovers) if budget_j is None
                        else apply_budget(trainer, instance, key, hovers, chan,
                                          budget_j,
@@ -911,9 +937,13 @@ def main() -> None:
               "no comparative information in this regime.")
     write_labels(runs, extra={
         "city_seeds": seeds,
-        "two_d_altitude_m": two_d_alt,
+        "two_d_altitude_m": two_d_alt,          # canonical scene (first seed)
+        "two_d_altitude_m_per_seed": {str(s): a for s, a in zip(seeds, two_d_alts)},
         "energy_budget_kj": args.energy_budget_kj,
         "regime": regime,
+        # Figures label their axes from this rather than hardcoding numbers, so
+        # a recalibration cannot leave a figure captioned with stale floors.
+        "class_floors_bps": dict(CITY_CLASS_FLOORS),
         "note": ("Deterministic planners on the frozen synthetic city. Slots "
                  "'3d_gnn' and 'atom3d' are NOT learned policies yet - see "
                  "each slot's 'source'."),

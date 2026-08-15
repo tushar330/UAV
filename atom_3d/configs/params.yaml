@@ -111,10 +111,21 @@ priority:
   # At alpha=3 a low close dive (clearance ~15 m) achieves ~44 Mbps and a high hover
   # ~22 Mbps, so: high floor binds (met only by a low dive -> forces altitude down),
   # medium binds moderately, low has no floor (served from any altitude).
+  # Floors must match what the figures score against (export_figure_data.
+  # CITY_CLASS_FLOORS), or the policy optimises a different objective than it is
+  # measured on. The previous medium=28 / low=0 pair did not bind: at alpha=3 a
+  # 0 floor is unfailable and 28 Mbps reaches 67 m, so 70% of nodes carried no
+  # QoS constraint during training while evaluation demanded one.
+  #
+  # Rate is compressed (~log(1/d^3)), so the usable band is 25-44 Mbps; these
+  # space the classes evenly across it and preserve the coverage gradient the
+  # contribution depends on - at a hover's best clearance one stop covers
+  # roughly 4 low / 2 medium / 1 high node, so flying higher over low-priority
+  # bulk and diving for critical nodes still pays.
   R_min:
-    high: 3.8e+7                    # ~38 Mbps  -> only met by a low, close hover (forces a dive)
-    medium: 2.8e+7                  # ~28 Mbps  -> met at moderate altitude
-    low: 0.0                        # loose: no floor (served from any altitude)
+    high: 3.8e+7                    # ~38 Mbps -> reach 21 m; met only by a close hover
+    medium: 3.25e+7                 # ~32.5 Mbps -> reach 40 m; moderate altitude
+    low: 2.9e+7                     # ~29 Mbps -> reach 60 m; binds, but loosely
   collect_order_bonus: true         # schedule high-priority nodes earlier (freshness / low AoI)
 
 channel:

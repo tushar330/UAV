@@ -30,7 +30,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from common_style import setup_style, COLORS
-from common_plot import save_figure, apply_labels, budget_footnote
+from common_plot import (save_figure, apply_labels, budget_footnote,
+                         class_floors_mbps)
 
 
 # =============================================================================
@@ -44,9 +45,16 @@ REAL_DATA_PATH = Path(__file__).resolve().parent / "results_data" / "qos_satisfa
 
 CLASSES = ["high", "medium", "low"]
 # Constraint-style labels remind the reader these are QoS floors, not tags.
-CLASS_LABELS = {"high": "High Priority\nQoS ≥ 38 Mbps",
-                "medium": "Medium Priority\nQoS ≥ 25 Mbps",
-                "low": "Low Priority\nQoS ≥ 8 Mbps"}
+CLASS_TITLES = {"high": "High Priority", "medium": "Medium Priority",
+                "low": "Low Priority"}
+# Fallback floors (Mbps) for placeholder mode; the real ones come from the
+# export, so a recalibration cannot leave this axis captioned with stale values.
+DEFAULT_FLOORS_MBPS = {"high": 38.0, "medium": 32.5, "low": 29.0}
+
+
+def class_labels():
+    floors = {**DEFAULT_FLOORS_MBPS, **class_floors_mbps()}
+    return {c: f"{CLASS_TITLES[c]}\nQoS ≥ {floors[c]:g} Mbps" for c in CLASS_TITLES}
 
 # Method order (left->right within each group), labels, colors, emphasis.
 # Baselines stay neutral; ATOM-3D-VoI uses the project method color and is
@@ -168,7 +176,7 @@ def plot_qos_comparison(data):
                 fontsize=8.5, fontweight="bold", color="0.2", zorder=5)
 
     ax.set_xticks(x)
-    ax.set_xticklabels([CLASS_LABELS[c] for c in classes])
+    ax.set_xticklabels([class_labels()[c] for c in classes])
     ax.set_ylabel("QoS Satisfaction (%)")
     # Headroom for the brace and its caption, without leaving dead space when
     # nothing reaches 100%.

@@ -52,8 +52,13 @@ _CITY_PICKLE = PAPER_FIGURES_DIR / "synthetic_city.pkl"
 # stated explicitly rather than silently inherited from the training config.
 CLASS_WEIGHTS: Dict[str, float] = {"high": 3.0, "medium": 2.0, "low": 1.0}
 
-# Per-class rate floors are NOT redefined here: every IoTNode carries its own
-# ``required_rate`` in the pickle, which is the single source of truth.
+# Per-class rate floors default to each IoTNode's own ``required_rate`` from the
+# pickle. They can be overridden per class (see ``class_floors``) because the
+# pickle's 38/25/8 Mbps do not all bind on this geometry: at alpha=3 those map
+# to reach 21.1 / 94.9 / 690.9 m, and on a 1000 m map a 690 m reach can never
+# fail. A floor that cannot fail measures coverage, not quality of service, so
+# with the shipped values only the critical class actually exercises a QoS
+# constraint. Overriding here keeps `synthetic_city.py` and the pickle locked.
 
 PRIORITY_ORDER = ("high", "medium", "low")
 
@@ -139,6 +144,7 @@ def build_instance(
     city=None,
     *,
     class_weights: Optional[Dict[str, float]] = None,
+    class_floors: Optional[Dict[str, float]] = None,
     recenter_on_depot: bool = False,
 ) -> CityInstance:
     """Convert the city into ATOM-3D evaluation tensors.
@@ -146,6 +152,9 @@ def build_instance(
     Args:
         city: a preloaded ``City``; loaded via :func:`load_city_object` if None.
         class_weights: override for the per-class importance w_i.
+        class_floors: {class: bits/s} replacing the pickle's per-node
+            ``required_rate``. Use when the shipped floors do not all bind on
+            this geometry (see the note above); None keeps the pickle's values.
         recenter_on_depot: shift x/y so the depot sits at the origin. Off by
             default — the scorer takes the depot position explicitly (see
             :func:`apply_city_depot`), so keeping the city's own [0, 1000]
@@ -165,8 +174,15 @@ def build_instance(
     xy = np.array([[nd.x, nd.y] for nd in nodes], dtype=np.float32)      # (N, 2)
     z = np.array([nd.z for nd in nodes], dtype=np.float32)               # (N,)
     demand = np.array([nd.demand for nd in nodes], dtype=np.float32)     # (N,)
-    rmin = np.array([nd.required_rate for nd in nodes], dtype=np.float32)
     priority = np.array([nd.priority for nd in nodes], dtype=object)
+    if class_floors is None:
+        rmin = np.array([nd.required_rate for nd in nodes], dtype=np.float32)
+    else:
+        missing = sorted({p for p in priority.tolist()} - set(class_floors))
+        if missing:
+            raise ValueError(f"class_floors is missing classes: {missing}")
+        rmin = np.array([class_floors[p] for p in priority.tolist()],
+                        dtype=np.float32)
 
     unknown = sorted({p for p in priority.tolist()} - set(weights))
     if unknown:
