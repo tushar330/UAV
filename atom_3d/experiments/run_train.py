@@ -43,6 +43,39 @@ def make_batch(mode: str, batch_size: int, N: int, params: dict, seed=None):
     return IoTEnvironment2D.generate_batch(batch_size, N, **kw)[0]
 
 
+# Seeds reserved for evaluation. City training must never draw these, or the
+# figures would report performance on scenes the policy was fitted to.
+HELD_OUT_CITY_SEEDS = frozenset({42, 43, 44, 45, 46})
+
+
+def make_city_batch(batch_size: int, params: dict, seed: int):
+    """A training batch of freshly generated city realizations.
+
+    The uniform-random generator draws a different world than the one the
+    figures score on: uniform placement instead of clustered districts, and a
+    10/30/60 class mix instead of the city's 10/20/70. Training on cities makes
+    the train and evaluation distributions the same family, which is the point
+    of the setup. Generation costs ~0.03 s per city, so this is not a bottleneck.
+
+    Returns (node_features, node_weights, node_rmin) — the same triple the
+    uniform path produces.
+    """
+    from ..env.city_adapter import build_instances_for_seeds
+
+    floors = {k: float(v) for k, v in params["priority"]["R_min"].items()}
+    weights = {k: float(v) for k, v in params["priority"]["weights"].items()}
+    seeds, s = [], int(seed)
+    while len(seeds) < batch_size:
+        if s not in HELD_OUT_CITY_SEEDS:
+            seeds.append(s)
+        s += 1
+    insts = build_instances_for_seeds(seeds, class_weights=weights,
+                                      class_floors=floors)
+    return (torch.cat([i.node_features for i in insts], dim=0),
+            torch.cat([i.node_weights for i in insts], dim=0),
+            torch.cat([i.node_rmin for i in insts], dim=0))
+
+
 def make_priorities(mode: str, batch_size: int, N: int, params: dict, enabled: bool, seed=None):
     """Per-node (weights, R_min) for a batch, or (None, None) when priority is off.
 
@@ -79,6 +112,10 @@ def main():
     ap.add_argument("--entropy-coef", type=float, default=0.0, help="entropy bonus for exploration")
     ap.add_argument("--freeze-altitude", type=float, default=None,
                     help="3D ablation: hover at this single altitude (disables the altitude head)")
+    ap.add_argument("--city", action="store_true",
+                    help="train on generated city realizations (the distribution "
+                         "the figures score on) instead of uniform-random "
+                         "scenarios; evaluates on held-out seeds 42-46")
     ap.add_argument("--priority", action="store_true",
                     help="enable priority-aware training (per-class R_min gate + weighted penalty)")
     ap.add_argument("--cmdp", action="store_true",
@@ -154,8 +191,22 @@ def main():
         print(f"[resume] loaded {ckpt_path} @ epoch {start_epoch - 1} -> continuing at {start_epoch}")
 
     # Fixed evaluation set (same instances every epoch for a stable curve).
-    eval_batch = make_batch(args.mode, n_eval, N, params, seed=seed + 9999)
-    eval_w, eval_r = make_priorities(args.mode, n_eval, N, params, priority_on, seed=seed + 9999)
+    if args.city:
+        # Held-out city seeds: the same scenes the figures are scored on, never
+        # drawn for training, so the curve tracks the target distribution.
+        eval_seeds = sorted(HELD_OUT_CITY_SEEDS)[:max(1, min(n_eval, 5))]
+        from ..env.city_adapter import build_instances_for_seeds as _bis
+        _floors = {k: float(v) for k, v in params["priority"]["R_min"].items()}
+        _weights = {k: float(v) for k, v in params["priority"]["weights"].items()}
+        _ev = _bis(eval_seeds, class_weights=_weights, class_floors=_floors)
+        eval_batch = torch.cat([i.node_features for i in _ev], dim=0)
+        eval_w = torch.cat([i.node_weights for i in _ev], dim=0)
+        eval_r = torch.cat([i.node_rmin for i in _ev], dim=0)
+        print(f"[train] city mode: eval on held-out seeds {eval_seeds}")
+    else:
+        eval_batch = make_batch(args.mode, n_eval, N, params, seed=seed + 9999)
+        eval_w, eval_r = make_priorities(args.mode, n_eval, N, params, priority_on,
+                                         seed=seed + 9999)
 
     history = {"reward": [], "actor_loss": [], "critic_loss": [],
                "avg_data": [], "avg_energy": []}
@@ -174,8 +225,13 @@ def main():
           f"priority={qos_mode}")
 
     for epoch in range(start_epoch, epochs + 1):
-        batch = make_batch(args.mode, batch_size, N, params, seed=seed + epoch)
-        b_w, b_r = make_priorities(args.mode, batch_size, N, params, priority_on, seed=seed + epoch)
+        if args.city:
+            batch, b_w, b_r = make_city_batch(batch_size, params,
+                                              seed=1000 + epoch * batch_size)
+        else:
+            batch = make_batch(args.mode, batch_size, N, params, seed=seed + epoch)
+            b_w, b_r = make_priorities(args.mode, batch_size, N, params, priority_on,
+                                       seed=seed + epoch)
         stats = trainer.train_step(batch, R_min=R_min, node_weights=b_w, node_rmin=b_r)
         trainer.sched_actor.step(); trainer.sched_critic.step()
 
