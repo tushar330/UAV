@@ -255,8 +255,23 @@ class TENMATrainer:
 
     # ------------------------------------------------------------------
     def _normalize(self, node_features: torch.Tensor) -> torch.Tensor:
-        """Scale raw [x,y,(z),D] features into an O(1) range for the encoder."""
+        """Scale raw [x,y,(z),D] features into an O(1) range for the encoder.
+
+        Positions are centred on each instance's own centroid before scaling, so
+        the encoder sees the same coordinate range whatever absolute frame the
+        scenario is expressed in. Training draws nodes in [-500, +500] about the
+        origin, while the paper's city uses [0, 1000]: with scale-only
+        normalisation the city landed in [+0.14, +1.87], so roughly half of it
+        fell outside anything the encoder saw during training. Routing depends
+        on relative geometry, not on absolute position, so centring loses no
+        information -- the depot is supplied separately to the scorer and never
+        was an encoder input.
+
+        On training batches the centroid is ~0, so this is close to a no-op
+        there; it is the evaluation frames that it rescues.
+        """
         f = node_features.clone()
+        f[..., :2] -= f[..., :2].mean(dim=1, keepdim=True)
         f[..., 0] /= self.xy_scale
         f[..., 1] /= self.xy_scale
         if self.is_3d:
