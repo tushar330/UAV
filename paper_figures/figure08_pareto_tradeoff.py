@@ -9,6 +9,22 @@ ATOM-3D-VoI delivers more high-priority satisfaction - its curve dominates -
 and its default operating point (76 kJ, 90 %) sits far above the baselines'
 defaults (70 kJ, 76 %) and (52 kJ, 70 %), consistent with Figs. 5-6.
 
+EXCLUDED FROM THE PAPER (2026-08-17)
+-----------------------------------
+This figure has NO valid data and is cut from the current manuscript.
+
+Its `pareto_sweep.npz` held serve-all-regime results that predate the
+budget-constrained formulation, and still contained the removed `3d_gnn`
+method. It was deleted rather than kept, because a stale archive renders as
+though it were a current result - the figure has no way to know its data
+belongs to a superseded regime.
+
+Regenerating it costs ~2 h: every sweep point re-plans with Strong-Coupled at
+a different QoS floor, and the hover cache cannot help because its key does
+not cover the swept floor. Until someone pays that, this script runs in
+PLACEHOLDER mode and stamps itself accordingly - which is the honest state.
+Do NOT show it beside Figures 5, 6 and 13.
+
 DATA
 ----
 All values come from `generate_placeholder_pareto_data`; swap in real sweep

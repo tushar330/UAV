@@ -4,9 +4,13 @@
       "label": "2D-AUTO (47 m)",
       "source": "per-node NN+2-opt tour at a fixed altitude"
     },
-    "3d_gnn": {
-      "label": "Blind-3D (greedy cover)",
-      "source": "QoS-blind greedy footprint cover; NOT a trained GNN policy"
+    "two_stage": {
+      "label": "Two-Stage (decoupled)",
+      "source": "QoS-blind cover, then shallow repair hovers; the standard decoupled approach this paper's coupling is measured against"
+    },
+    "coupled_greedy": {
+      "label": "Coupled-Greedy (ablation)",
+      "source": "QoS-aware coupled planner WITHOUT the local search; an ablation of the proposed method, not an independent baseline"
     },
     "atom3d": {
       "label": "Strong-Coupled (deterministic)",
@@ -14,7 +18,7 @@
     }
   },
   "generated_by": "atom_3d.experiments.export_figure_data",
-  "generated_at": "2026-08-17 02:15:55",
+  "generated_at": "2026-08-17 21:29:32",
   "city_seeds": [
     42,
     43,
@@ -47,5 +51,5 @@
     "medium": 32500000.0,
     "low": 29000000.0
   },
-  "note": "Deterministic planners on the frozen synthetic city. Slots '3d_gnn' and 'atom3d' are NOT learned policies yet - see each slot's 'source'."
+  "note": "Deterministic planners on the frozen synthetic city. No slot holds a learned policy - see each slot's 'source'. 'two_stage' is the baseline the contribution is measured against; 'coupled_greedy' is an ablation of 'atom3d', not an independent method."
 }

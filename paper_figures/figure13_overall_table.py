@@ -69,6 +69,12 @@ CONTROL_KEYS: set[str] = set()
 SIG_LEVELS = [(0.001, "***"), (0.01, "**"), (0.05, "*")]
 NS_MARK = "n.s."
 
+# The starred marks are measured against the 2D base paper this work extends.
+# The strongest 3D baseline is reported separately (see `secondary_comparison`)
+# so it is visible in the main results and cannot look suppressed.
+OURS_METHOD = "atom3d"
+SECONDARY_REFERENCE = "two_stage"
+
 # Labels describe whatever actually produced the numbers on disk (the
 # exporter's results_data/labels.json); unchanged in placeholder mode.
 METHODS = apply_labels(METHODS)
@@ -132,9 +138,46 @@ def load_table_results():
                   for i, m in enumerate(methods)}
         pvalues = {m: {k: float(pvals[i, j]) for j, k in enumerate(metrics)}
                    for i, m in enumerate(methods)}
+        # Raw per-seed samples, kept so the SECONDARY comparison below can be
+        # computed here without another export run.
+        samples = {k: np.asarray(z[k], float) for k in keys
+                   if k.startswith("samples_")}
         return {"values": values, "pvalues": pvalues, "n_seeds": n_seeds,
-                "legacy_ci": legacy_ci, "placeholder": False}
+                "legacy_ci": legacy_ci, "samples": samples,
+                "placeholder": False}
     return generate_placeholder_table_data()
+
+
+def secondary_comparison(samples, ours=OURS_METHOD, other=SECONDARY_REFERENCE):
+    """Paired ours-vs-`other` p-values, as a {metric: p} dict.
+
+    The starred marks in this table are measured against the 2D base paper,
+    which is the work being extended. But 2D cannot reach the critical class at
+    all, so a reader is entitled to ask how the method compares with a competent
+    3D baseline. Reporting that here - from the same per-seed samples, so no
+    re-planning is needed - answers it in the main results rather than leaving
+    the strongest baseline looking hidden.
+
+    Returns {} when the export predates the stored samples.
+    """
+    out = {}
+    for key, _, _ in COLUMNS:
+        a = samples.get(f"samples_{ours}_{key}")
+        b = samples.get(f"samples_{other}_{key}")
+        if a is None or b is None or a.size != b.size or a.size < 2:
+            continue
+        d = a - b
+        sd = float(np.std(d, ddof=1))
+        if sd == 0.0:
+            out[key] = 1.0 if float(np.mean(d)) == 0.0 else 0.0
+            continue
+        t = float(np.mean(d)) / (sd / np.sqrt(d.size))
+        try:
+            from scipy import stats
+            out[key] = float(2.0 * (1.0 - stats.t.cdf(abs(t), d.size - 1)))
+        except Exception:
+            return {}
+    return out
 
 
 # =============================================================================
@@ -234,6 +277,14 @@ def plot_table(data):
                     "*** p<0.001, ** p<0.01, * p<0.05, n.s. not significant.")
     if n_seeds:
         bits.append(f"n = {n_seeds} city seeds; ± is the Student-t 95% CI.")
+    # Secondary comparison against the strongest 3D baseline, stated explicitly
+    # so the primary marks cannot be misread as being against the adjacent bar.
+    sec = secondary_comparison(data.get("samples", {}))
+    if sec:
+        ref_label = dict((k, l) for k, l, _ in METHODS).get(
+            SECONDARY_REFERENCE, SECONDARY_REFERENCE)
+        parts = [f"{k} p={sec[k]:.3f}" for k, _, _ in COLUMNS if k in sec]
+        bits.append(f"Ours vs {ref_label}, paired: " + ", ".join(parts) + ".")
     if data.get("legacy_ci"):
         bits.append("CI from a legacy export (normal quantile) — re-export to correct.")
     bits.append("Means match Figs. 5-6; ↓ lower is better, ↑ higher is better.")
