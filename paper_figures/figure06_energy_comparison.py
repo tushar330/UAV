@@ -39,7 +39,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from common_style import setup_style, COLORS
-from common_plot import save_figure, apply_labels, run_regime
+from common_plot import save_figure, apply_labels, run_regime, present_methods
 
 
 # =============================================================================
@@ -64,9 +64,10 @@ CATEGORY_LABELS = {
 
 # Method order / labels / colors / emphasis - IDENTICAL to figure05.
 METHOD_STYLE = [
-    ("2d_auto", "2D-AUTO", "#9E9E9E", False),
-    ("3d_gnn",  "3D-GNN",  "#FB8C00", False),
-    ("atom3d",  "ATOM-3D-VoI (Ours)", COLORS["ours"], True),
+    ("2d_auto",        "2D-AUTO",                   "#9E9E9E", False),
+    ("two_stage",      "Two-Stage (decoupled)",     "#FB8C00", False),
+    ("coupled_greedy", "Coupled-Greedy (ablation)", "#64B5F6", False),
+    ("atom3d",         "ATOM-3D-VoI (Ours)", COLORS["ours"], True),
 ]
 
 # Labels describe whatever actually produced the numbers on disk (the
@@ -90,20 +91,24 @@ def generate_placeholder_energy_data():
         }
 
     Placeholder logic (from smoke-test observations):
-      * 3D-GNN  - LOWEST flight, hover and total energy: it spends most of the
-                  mission at relatively high altitude and performs few
-                  purposeful descents. That saving is precisely why its
-                  critical-node QoS is the lowest (Fig. 5).
       * 2D-AUTO - moderate total; fixed low-altitude operation with efficient
                   routing; good for ground sensors, weak on elevated critical ones.
-      * ATOM-3D-VoI - total only slightly above 2D-AUTO and clearly above 3D-GNN;
-                  the increment appears in BOTH flight and hover (selective
-                  descend -> serve -> ascend). Communication stays similar.
+      * Two-Stage - pays twice: a high QoS-blind cover, then a second pass of
+                  shallow repair hovers, so hover energy is the highest.
+      * Coupled-Greedy - the coupling avoids the repair pass; cheaper than
+                  Two-Stage without the local search's refinement.
+      * ATOM-3D-VoI - total close to 2D-AUTO; the increment appears in BOTH
+                  flight and hover (selective descend -> serve -> ascend).
+                  Communication stays similar.
+
+    Under the budget regime these totals are all near B by construction; the
+    figure is read for the SPLIT between components, not for a winner.
     """
     components = {
-        "2d_auto": {"flight": 40.0, "hover": 22.0, "comm": 8.0},
-        "3d_gnn":  {"flight": 30.0, "hover": 14.0, "comm": 8.0},
-        "atom3d":  {"flight": 43.0, "hover": 25.0, "comm": 8.0},
+        "2d_auto":        {"flight": 40.0, "hover": 22.0, "comm": 8.0},
+        "two_stage":      {"flight": 38.0, "hover": 28.0, "comm": 8.0},
+        "coupled_greedy": {"flight": 41.0, "hover": 24.0, "comm": 8.0},
+        "atom3d":         {"flight": 43.0, "hover": 25.0, "comm": 8.0},
     }
     values = {}
     for m, comp in components.items():
@@ -172,7 +177,7 @@ def qos_note(values, high_qos):
     # the only thing that differs is the QoS that budget buys.
     budget = run_regime().get("energy_budget_kj")
     if budget and high_qos and {"atom3d", "2d_auto"} <= set(high_qos):
-        totals = [values[k]["total"] for k, *_ in METHOD_STYLE]
+        totals = [values[k]["total"] for k, *_ in present_methods(METHOD_STYLE, values)]
         spread = (max(totals) - min(totals)) / max(max(totals), 1e-9) * 100.0
         ours = dict((k, lbl) for k, lbl, *_ in METHOD_STYLE)["atom3d"]
         return (f"Equal budget B = {float(budget):.0f} kJ: all methods spend within "
@@ -222,7 +227,9 @@ def plot_energy_comparison(data):
         ax.axvspan(ti - 0.46, ti + 0.46, color=COLORS["ours"], alpha=0.05,
                    zorder=0)
 
-    for i, (key, label, color, emph) in enumerate(METHOD_STYLE):
+    style = present_methods(METHOD_STYLE, values)
+    n = len(style)
+    for i, (key, label, color, emph) in enumerate(style):
         offset = (i - (n - 1) / 2.0) * width
         heights = [values[key][c] for c in cats]
         bars = ax.bar(
@@ -240,19 +247,22 @@ def plot_energy_comparison(data):
 
     # Axis range follows the data: real energies differ in magnitude from the
     # placeholder set, so a fixed limit would clip the tallest bars.
-    peak = max(values[key][c] for key, *_ in METHOD_STYLE for c in cats)
+    peak = max(values[key][c] for key, *_ in style for c in cats)
     top = peak * 1.28                      # headroom for the brace + labels
     brace_y = peak * 1.10
 
-    # Brace over the Total group quantifying our cost against the 2D baseline -
-    # the companion of Figure 5's "Largest Improvement" brace. The wording is
-    # derived from the data, so it stays true whichever way the comparison goes.
+    # Brace over the Total group. Under the budget regime energy is a CONTROLLED
+    # VARIABLE, not an outcome: every method flies until the same B is spent, so
+    # the residual gap is budget granularity (a hover cannot be flown in part),
+    # not an energy saving. An earlier version read "3% less energy than 2D",
+    # which invited the reader to treat a non-significant by-construction
+    # difference as a result. State the control instead - it is what makes the
+    # QoS comparison in Figure 5 a fair one.
     if "total" in cats and {"atom3d", "2d_auto"} <= set(values):
         ti = cats.index("total")
         ours, base = values["atom3d"]["total"], values["2d_auto"]["total"]
-        delta = (ours - base) / base * 100.0 if base else 0.0
-        verdict = (f"{abs(delta):.0f}% less energy than 2D" if delta < 0
-                   else f"{delta:.0f}% more energy than 2D")
+        delta = abs(ours - base) / base * 100.0 if base else 0.0
+        verdict = f"equal budget: within {delta:.0f}% of 2D"
         x1, x2, tick = ti - 0.40, ti + 0.40, top * 0.033
         ax.plot([x1, x1, x2, x2],
                 [brace_y - tick, brace_y, brace_y, brace_y - tick],

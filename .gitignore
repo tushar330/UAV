@@ -2,3 +2,6 @@ __pycache__/
 *.pyc
 .ipynb_checkpoints/
 atom_3d/logs/
+# Hover-plan cache (--hover-cache). Large, machine-local, and fully
+# regenerable; it only saves planning time on re-runs.
+results_data_cache/

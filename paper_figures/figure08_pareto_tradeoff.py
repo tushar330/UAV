@@ -28,7 +28,7 @@ import matplotlib.pyplot as plt
 import matplotlib.lines as mlines
 
 from common_style import setup_style, COLORS
-from common_plot import save_figure, apply_labels
+from common_plot import present_methods, save_figure, apply_labels
 
 
 # =============================================================================
@@ -42,7 +42,8 @@ REAL_DATA_PATH = Path(__file__).resolve().parent / "results_data" / "pareto_swee
 
 METHOD_STYLE = [
     ("2d_auto", "2D-AUTO", "#9E9E9E", "o", False),
-    ("3d_gnn", "3D-GNN", "#FB8C00", "s", False),
+    ("two_stage", "Two-Stage (decoupled)", "#FB8C00", "s", False),
+    ("coupled_greedy", "Coupled-Greedy (ablation)", "#64B5F6", "D", False),
     ("atom3d", "ATOM-3D-VoI (Ours)", COLORS["ours"], "^", True),
 ]
 
@@ -63,7 +64,7 @@ def generate_placeholder_pareto_data():
           "placeholder": True,
         }
     The "default" point of each method matches Figures 5-6 exactly:
-    2D-AUTO (70, 76), 3D-GNN (52, 70), ATOM-3D-VoI (76, 90).
+    2D-AUTO (70, 76), Two-Stage (69, 79), Coupled-Greedy (73, 86), Ours (76, 90).
     """
     curves = {
         "2d_auto": {
@@ -71,10 +72,15 @@ def generate_placeholder_pareto_data():
             "satisfaction": [58, 68, 76, 80, 82],
             "default": (70, 76),
         },
-        "3d_gnn": {
-            "energy": [40, 46, 52, 60, 70],
-            "satisfaction": [52, 62, 70, 74, 76],
-            "default": (52, 70),
+        "two_stage": {
+            "energy": [54, 61, 69, 78, 88],
+            "satisfaction": [60, 71, 79, 83, 85],
+            "default": (69, 79),
+        },
+        "coupled_greedy": {
+            "energy": [56, 64, 73, 83, 93],
+            "satisfaction": [67, 78, 86, 89, 91],
+            "default": (73, 86),
         },
         "atom3d": {
             "energy": [58, 66, 76, 86, 96],
@@ -94,7 +100,9 @@ def load_pareto_results():
     if REAL_DATA_PATH.exists():
         z = np.load(REAL_DATA_PATH, allow_pickle=True)
         curves = {}
-        for m, *_ in METHOD_STYLE:
+        avail = {k.rsplit("_energy", 1)[0] for k in z.files
+                 if k.endswith("_energy")}
+        for m, *_ in present_methods(METHOD_STYLE, avail):
             curves[m] = {
                 "energy": list(np.asarray(z[f"{m}_energy"], float)),
                 "satisfaction": list(np.asarray(z[f"{m}_satisfaction"], float)),
@@ -112,7 +120,7 @@ def plot_pareto(data):
     curves = data["curves"]
     fig, ax = plt.subplots(figsize=(7.4, 5.2))
 
-    for key, label, color, marker, emph in METHOD_STYLE:
+    for key, label, color, marker, emph in present_methods(METHOD_STYLE, curves):
         c = curves[key]
         ax.plot(c["energy"], c["satisfaction"], color=color,
                 lw=2.4 if emph else 1.6, marker=marker, ms=6 if emph else 5,

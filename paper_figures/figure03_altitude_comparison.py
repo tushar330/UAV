@@ -3,11 +3,12 @@ figure03_altitude_comparison.py
 
 Figure 3 - Adaptive Altitude Behaviour Across UAV Policies.
 
-Altitude vs. mission progress for the three policies (2D-AUTO, 3D-GNN,
+Altitude vs. mission progress for the four policies (2D-AUTO, Two-Stage,
 ATOM-3D-VoI). The story must land in <5 s: only ATOM-3D-VoI intentionally
 descends at high-priority service events (its dives line up with the red
 critical-event dots and the faintly shaded serving intervals) to satisfy the
-high-priority 38 Mbps QoS floor, while 3D-GNN merely wobbles and 2D-AUTO is
+high-priority 38 Mbps QoS floor, while Two-Stage repairs only after the fact
+and 2D-AUTO is
 flat.
 
 DATA
@@ -33,7 +34,7 @@ import matplotlib.pyplot as plt
 import matplotlib.lines as mlines
 
 from common_style import setup_style, COLORS
-from common_plot import save_figure, apply_labels, priority_color
+from common_plot import present_methods, save_figure, apply_labels, priority_color
 
 
 # =============================================================================
@@ -49,16 +50,17 @@ REAL_DATA_PATH = Path(__file__).resolve().parent / "results_data" / "altitude_tr
 CRUISE_ALT = 90.0          # ATOM-3D-VoI nominal cruise
 HOVER_ALT = 30.0           # ATOM-3D-VoI nominal dive-to-serve altitude
 FIXED_2D_ALT = 100.0       # 2D-AUTO constant altitude
-GNN_MEAN_ALT = 80.0        # 3D-GNN mean altitude (small oscillation)
+GNN_MEAN_ALT = 80.0        # Two-Stage stage-1 cruise altitude
 
 # Per-class QoS rate floors (Mbps) - the WHY behind the dives (see DATA_SPEC).
 QOS_RATE = {"high": 38, "medium": 25, "low": 8}
 
-# Visual hierarchy: Ours dominant, 3D-GNN second, 2D-AUTO least.
+# Visual hierarchy: Ours dominant, then its ablation, then the baselines.
 # (key, label, color, linewidth, alpha, z-order)
 METHOD_STYLE = [
-    ("atom3d", "ATOM-3D-VoI (Ours)", COLORS["ours"], 3.0, 1.00, 6),
-    ("3d_gnn", "3D-GNN",             "#FB8C00",       1.9, 0.95, 5),
+    ("atom3d", "ATOM-3D-VoI (Ours)", COLORS["ours"], 3.0, 1.00, 7),
+    ("coupled_greedy", "Coupled-Greedy (ablation)", "#64B5F6", 1.9, 0.95, 6),
+    ("two_stage", "Two-Stage (decoupled)", "#FB8C00", 1.9, 0.95, 5),
     ("2d_auto", "2D-AUTO",           "#9E9E9E",       1.1, 0.90, 4),
 ]
 
@@ -97,7 +99,7 @@ def generate_placeholder_altitude_traces(n=1400, seed=7):
     Schema (identical to what the real experiment export must provide):
         {
           "progress": (n,) float   - mission progress in percent [0, 100],
-          "traces":   {"2d_auto":(n,), "3d_gnn":(n,), "atom3d":(n,)} altitude m,
+          "traces":   {method_key: (n,)} altitude m,
           "events":   [ {"progress": float, "priority": "high|medium|low"} ],
           "critical_intervals": [ (start, end) ]  serving-a-high-priority ranges,
           "placeholder": True,
@@ -123,11 +125,17 @@ def generate_placeholder_altitude_traces(n=1400, seed=7):
     # --- 2D-AUTO: perfectly constant altitude ---
     auto = np.full_like(x, FIXED_2D_ALT)
 
-    # --- 3D-GNN: small, smooth oscillation (+-4-5 m), unrelated to events ---
-    gnn = (GNN_MEAN_ALT
-           + 2.6 * np.sin(2 * np.pi * x / 41.0 + 0.6)
-           + 1.6 * np.sin(2 * np.pi * x / 17.0 + 1.3)
-           + 1.0 * np.sin(2 * np.pi * x / 67.0 + rng.uniform(0, 2 * np.pi)))
+    # --- Two-Stage: high QoS-blind cruise, then abrupt repair dives that are
+    # NOT aligned to the critical events (stage 2 reacts after the fact) ---
+    two_stage = (GNN_MEAN_ALT
+                 + 2.6 * np.sin(2 * np.pi * x / 41.0 + 0.6)
+                 + 1.6 * np.sin(2 * np.pi * x / 17.0 + 1.3))
+    for c in (22.0, 54.0, 79.0):
+        two_stage = two_stage - 30.0 * _dive_well(x, c, 1.5, 2.0, 2.0)
+
+    # --- Coupled-Greedy: dives on the right events, but shallower and blunter
+    # than the local-searched version ---
+    greedy = np.full_like(x, CRUISE_ALT - 6.0)
 
     # --- ATOM-3D-VoI: cruise, diving to serve each HIGH event (each unique) ---
     reduction = np.zeros_like(x)
@@ -142,6 +150,10 @@ def generate_placeholder_altitude_traces(n=1400, seed=7):
         trans_up = rng.uniform(5.0, 7.0)                    # slightly faster climb
         well = _dive_well(x, c, plateau_hw, trans_down, trans_up)
         reduction = np.maximum(reduction, (CRUISE_ALT - hover) * well)
+        # Same events, shallower dives: the ablation finds the right places but
+        # not the refined depth the local search reaches.
+        greedy = np.minimum(greedy, (CRUISE_ALT - 6.0)
+                            - (CRUISE_ALT - hover - 12.0) * well)
         critical_intervals.append((c - (plateau_hw + 2.5), c + (plateau_hw + 2.5)))
     atom = CRUISE_ALT - reduction
     # tiny smooth ripple so cruise/hover are not dead-flat (still readable)
@@ -149,7 +161,8 @@ def generate_placeholder_altitude_traces(n=1400, seed=7):
 
     return {
         "progress": x,
-        "traces": {"2d_auto": auto, "3d_gnn": gnn, "atom3d": atom},
+        "traces": {"2d_auto": auto, "two_stage": two_stage,
+                   "coupled_greedy": greedy, "atom3d": atom},
         "events": events,
         "critical_intervals": critical_intervals,
         "placeholder": True,
@@ -177,7 +190,8 @@ def load_altitude_traces():
 
 def _plot_traces(ax, data, *, scale=1.0):
     x = data["progress"]
-    for key, label, color, lw, alpha, z in METHOD_STYLE:
+    for key, label, color, lw, alpha, z in present_methods(
+            METHOD_STYLE, data["traces"]):
         ax.plot(x, data["traces"][key], color=color, lw=lw * scale, alpha=alpha,
                 zorder=z, solid_capstyle="round", label=label)
 

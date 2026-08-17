@@ -6,8 +6,8 @@ Figure 7 - 3D Trajectories in the Network (reference panel (a)).
 3D view of the synthetic-city IoT nodes (colored by priority) with one
 representative hover-point trajectory per policy. Message: ATOM-3D-VoI's
 hover sequence dips low exactly over the high-priority clusters (Hospital,
-Power Station), while 3D-GNN stays high everywhere and 2D-AUTO is pinned to
-one fixed altitude.
+Power Station), while the decoupled Two-Stage baseline repairs violations only
+after the fact and 2D-AUTO is pinned to one fixed altitude.
 
 DATA
 ----
@@ -31,6 +31,7 @@ import matplotlib.lines as mlines
 
 from common_style import setup_style, COLORS
 from common_plot import (save_figure, priority_color, method_labels,
+                         present_methods,
                          PRIORITY_ORDER, PRIORITY_LABELS)
 from synthetic_city import get_city
 
@@ -63,15 +64,20 @@ BOX_ASPECT = (1.0, 1.0, 0.5)
 METHOD_STYLE = {
     "2d_auto": dict(label="2D-AUTO", color="#9E9E9E", ls=":", lw=1.4, z=5,
                     marker=None),
-    "3d_gnn": dict(label="3D-GNN", color="#FB8C00", ls="--", lw=1.8, z=6,
-                   marker=20),
+    "two_stage": dict(label="Two-Stage (decoupled)", color="#FB8C00",
+                      ls="--", lw=1.8, z=6, marker=20),
     "atom3d": dict(label="ATOM-3D-VoI (Ours)", color=COLORS["ours"],
                    ls="-", lw=2.0, z=7, marker=11),
 }
 
-# Labels must name whatever actually produced each curve (results_data/labels.json):
-# the '3d_gnn' slot currently holds a deterministic greedy cover, NOT a trained
-# GNN, and the legend must not claim otherwise.
+# 'coupled_greedy' is deliberately NOT drawn here. Four overlapping paths over
+# the city is unreadable, and the ablation's route is visually near-identical to
+# the full method (it dives at the same places, just less deeply - that is the
+# point of Fig. 3). It appears in every quantitative figure; this one carries the
+# qualitative contrast fixed-altitude vs decoupled vs coupled.
+#
+# Labels must name whatever actually produced each curve (results_data/labels.json),
+# and the legend must not claim a method that did not run.
 for _key, _label in method_labels().items():
     if _key in METHOD_STYLE:
         METHOD_STYLE[_key]["label"] = _label
@@ -88,8 +94,8 @@ def generate_placeholder_trajectories():
         { method_key: [(x, y, z), ...] }   # ordered hover points, depot first/last
     Behaviour encoded: Ours cruises ~90 m, dives to ~30 m over the Hospital
     (500,180) and Power Station (170,820) high-priority clusters, and serves
-    medium clusters from moderate altitude. 3D-GNN wanders at ~80 m with no
-    purposeful descents. 2D-AUTO holds its fixed 100 m altitude.
+    medium clusters from moderate altitude. Two-Stage cruises high (~80 m) from a
+    QoS-blind cover. 2D-AUTO holds its fixed 100 m altitude.
     """
     return {
         "atom3d": [
@@ -97,7 +103,7 @@ def generate_placeholder_trajectories():
             (500, 760, 88), (500, 500, 55), (780, 500, 89), (780, 820, 52),
             (620, 300, 87), (500, 180, 30), (250, 120, 86), (50, 50, 0),
         ],
-        "3d_gnn": [
+        "two_stage": [
             (50, 50, 0), (300, 300, 80), (600, 400, 83), (820, 640, 78),
             (560, 720, 82), (240, 700, 79), (420, 160, 81), (50, 50, 0),
         ],
@@ -167,7 +173,7 @@ def plot_trajectories(city, trajs):
 
     # Trajectories (draw ours last so it sits on top). Hover markers are drawn
     # only where they stay readable -- see METHOD_STYLE["marker"].
-    for key in ("2d_auto", "3d_gnn", "atom3d"):
+    for key in present_methods(("2d_auto", "two_stage", "atom3d"), trajs):
         st = METHOD_STYLE[key]
         pts = np.array(trajs[key], float)
         ax.plot(pts[:, 0], pts[:, 1], pts[:, 2], color=st["color"],
@@ -227,8 +233,8 @@ def plot_trajectories(city, trajs):
     ] + [
         mlines.Line2D([], [], color=st["color"], ls=st["ls"],
                       lw=max(st["lw"], 1.8), label=st["label"])
-        for st in (METHOD_STYLE["2d_auto"], METHOD_STYLE["3d_gnn"],
-                   METHOD_STYLE["atom3d"])
+        for st in (METHOD_STYLE[k] for k in present_methods(
+            ("2d_auto", "two_stage", "atom3d"), trajs))
     ]
     ax.legend(handles=handles, loc="upper left", bbox_to_anchor=(0.0, 0.97),
               fontsize=7.5, framealpha=0.92, borderpad=0.5, labelspacing=0.35)

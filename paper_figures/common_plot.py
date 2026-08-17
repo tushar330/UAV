@@ -66,7 +66,8 @@ def priority_color(priority: str) -> str:
 # METHOD LABELS (provenance-aware)
 # =============================================================================
 #
-# A figure's method slot keys ("2d_auto", "3d_gnn", "atom3d") are stable, but
+# A figure's method slot keys ("2d_auto", "two_stage", "coupled_greedy",
+# "atom3d") are stable, but
 # the *label* must describe whatever actually produced the numbers on disk. The
 # exporter (`atom_3d.experiments.export_figure_data`) writes a sidecar
 # `results_data/labels.json` naming the real source of each slot, so a figure
@@ -140,6 +141,30 @@ def budget_footnote() -> str:
     return (f"Equal-budget comparison: every method flies its own route until "
             f"B = {float(budget):.0f} kJ is spent, so energy is comparable by "
             f"construction and QoS is what differs.")
+
+
+def present_methods(method_style, available) -> list:
+    """Keep only the method slots the loaded results actually contain.
+
+    The set of methods is not fixed forever: Blind-3D was dropped and Two-Stage
+    and Coupled-Greedy were added. Without this filter a figure hard-crashes
+    with a KeyError whenever its declared slots and the data on disk disagree -
+    which is exactly what happens in the window between a code change and the
+    next export, and after any run that skips a method.
+
+    Skipping is the right behaviour rather than substituting a default: a figure
+    must never invent a curve for a method that did not run.
+
+    ``method_style`` may be a list of (key, ...) tuples or a sequence of plain
+    keys; ``available`` is any container supporting ``in`` (dict, set, npz).
+    """
+    keys = set(available)
+    out = []
+    for entry in method_style:
+        key = entry[0] if isinstance(entry, (tuple, list)) else entry
+        if key in keys:
+            out.append(entry)
+    return out
 
 
 def apply_labels(method_style: Sequence[tuple], *, index: int = 1) -> list:

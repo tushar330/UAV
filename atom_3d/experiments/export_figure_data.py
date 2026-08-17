@@ -21,7 +21,8 @@ available at run time, and reports what it actually was:
 slot     without a checkpoint             with a checkpoint
 ======== ================================ ==============================
 2d_auto  per-node NN+2-opt tour, fixed H  (unchanged - not a learned method)
-3d_gnn   QoS-blind greedy footprint cover ``3d_gnn.pt`` learned policy
+two_stage    decoupled cover + repair     (unchanged - not a learned method)
+coupled_greedy coupled, no local search   (unchanged - ablation of ours)
 atom3d   strong coupled planner           ``3d_attention_priority_cmdp.pt``
 ======== ================================ ==============================
 
@@ -67,7 +68,7 @@ from .heuristic_baseline import _plan_from_steps
 
 # The deterministic planners live in the root-level `experiments` package.
 from experiments.two_stage_vs_coupled import (          # noqa: E402
-    d_max_of, make_channel_consts, plan_coupled, plan_energy_min, rate_of,
+    d_max_of, make_channel_consts, plan_coupled, plan_two_stage, rate_of,
 )
 from experiments.strong_coupled import plan_coupled_strong  # noqa: E402
 
@@ -99,8 +100,10 @@ ALTITUDE_GRID: Tuple[float, ...] = (30, 45, 60, 80, 100, 120, 140)
 CITY_CLASS_FLOORS = {"high": 38.0e6, "medium": 32.5e6, "low": 29.0e6}
 
 # Figure slot -> checkpoint tag that would upgrade it to a learned result.
+# Only the 'atom3d' slot can be filled by a trained policy. The former
+# '3d_gnn' entry pointed at a checkpoint that was never trained and does not
+# exist, which risked implying a learned GNN baseline the paper never ran.
 LEARNED_CHECKPOINTS = {
-    "3d_gnn": "3d_gnn",
     "atom3d": "3d_attention_priority_cmdp",
 }
 
@@ -119,11 +122,12 @@ UNSERVED_RATE_MBPS = 1e-3
 # ~B (so energy is comparable BY CONSTRUCTION) and they differ in how much QoS
 # that budget buys. That is the axis the contribution is actually about.
 #
-# Per Q6 the baselines are priority-BLIND: 2D-AUTO and Blind-3D fly their own
-# tour order until the budget runs out. Only the priority-aware method reorders
-# its hovers by value, because prioritization IS the method under test - giving
-# the baselines the same reordering would hand them the contribution for free.
-BASELINE_KEYS = ("2d_auto", "3d_gnn")
+# Baselines fly their own tour order until the budget runs out. Only the
+# coupled family reorders its hovers by value, because prioritization IS the
+# method under test - giving the baselines the same reordering would hand them
+# the contribution for free. 'coupled_greedy' is an ablation OF the method, so
+# it is treated as ours, not as a baseline.
+BASELINE_KEYS = ("2d_auto", "two_stage")
 
 
 # ---------------------------------------------------------------------------
@@ -133,7 +137,8 @@ BASELINE_KEYS = ("2d_auto", "3d_gnn")
 class MethodRun:
     """One method slot evaluated over one or more city realizations."""
 
-    key: str                       # figure slot key (2d_auto / 3d_gnn / atom3d)
+    key: str                       # slot key (2d_auto / two_stage /
+                                   #           coupled_greedy / atom3d)
     label: str                     # honest label describing what actually ran
     source: str                    # provenance sentence for labels.json
     metrics: List[dict] = field(default_factory=list)   # scorer output per city
@@ -352,10 +357,24 @@ def hovers_2d_auto(instance: CityInstance, altitude: float):
     return [(i, altitude, np.array([i])) for i in range(instance.num_nodes)]
 
 
-def hovers_blind_3d(trainer, instance: CityInstance, chan):
-    """Priority-blind greedy footprint cover: 3D, altitude varies, QoS ignored."""
+def hovers_two_stage(trainer, instance: CityInstance, chan):
+    """DECOUPLED two-stage planner - the baseline the contribution is measured against.
+
+    Standard practice: place hovers first (QoS-blind energy-min cover), then fix
+    whatever violates its rate floor by adding shallow repair hovers. This is the
+    natural way to do 3D, and 'coupled beats decoupled' IS the paper's claim - so
+    this row, not the ablation, is what the contribution has to clear.
+
+    It replaces the former 'Blind-3D' slot, which was a degenerate control that
+    scored ~0-1% on every class (and whose key `3d_gnn` was a misnomer: no GNN
+    was ever involved). Beating it demonstrated nothing.
+    """
     nf = instance.node_features.numpy()[0]
-    return plan_energy_min(trainer, nf[:, :2], nf[:, 2], nf[:, 3], ALTITUDE_GRID, chan)
+    xy, z, dem = nf[:, :2], nf[:, 2], nf[:, 3]
+    rmin = instance.node_rmin[0].numpy()
+    dmax = d_max_of(rmin, chan)
+    return plan_two_stage(trainer, xy, z, dem, rmin, ALTITUDE_GRID, chan,
+                          trainer.H_min, trainer.H_max, trainer.h_safe, dmax)
 
 
 def hovers_coupled(trainer, instance: CityInstance, chan, *,
@@ -416,8 +435,8 @@ def run_2d_auto(trainer, instance: CityInstance, altitude: float) -> dict:
     return _score_hovers(trainer, instance, hovers_2d_auto(instance, altitude))
 
 
-def run_blind_3d(trainer, instance: CityInstance, chan) -> dict:
-    return _score_hovers(trainer, instance, hovers_blind_3d(trainer, instance, chan))
+def run_two_stage(trainer, instance: CityInstance, chan) -> dict:
+    return _score_hovers(trainer, instance, hovers_two_stage(trainer, instance, chan))
 
 
 def run_coupled(trainer, instance: CityInstance, chan, *,
@@ -566,16 +585,76 @@ def write_altitude_traces(runs: Sequence[MethodRun], instance: CityInstance,
     })
 
 
-def write_overall_metrics(runs: Sequence[MethodRun], instances) -> None:
+def _t_crit(df: int) -> float:
+    """Two-sided 95% Student-t critical value for ``df`` degrees of freedom.
+
+    The normal quantile 1.96 is only correct as df -> infinity. At the seed
+    counts these figures actually run (n = 5 -> df = 4, t = 2.776) it understates
+    every interval by 42%, which is exactly the kind of error a reviewer checks
+    first. SciPy is a declared dependency (PROJECT_SPEC), but this falls back to
+    a table so the exporter never dies for want of it.
+    """
+    if df < 1:
+        return float("nan")
+    try:
+        from scipy import stats
+        return float(stats.t.ppf(0.975, df))
+    except Exception:
+        table = {1: 12.706, 2: 4.303, 3: 3.182, 4: 2.776, 5: 2.571,
+                 6: 2.447, 7: 2.365, 8: 2.306, 9: 2.262, 10: 2.228,
+                 12: 2.179, 15: 2.131, 20: 2.086, 30: 2.042, 60: 2.000}
+        for k in sorted(table):
+            if df <= k:
+                return table[k]
+        return 1.96
+
+
+def _paired_t_test(ours: np.ndarray, base: np.ndarray) -> Tuple[float, float]:
+    """Paired two-sided t-test on (ours - base). Returns (mean_diff, p).
+
+    The comparison is PAIRED by construction: every method is scored on the same
+    ``--city-seeds``, so pairing removes between-city variance and is both the
+    correct and the more powerful test. Comparing independent CIs instead throws
+    that structure away and understates significance.
+    """
+    d = np.asarray(ours, float) - np.asarray(base, float)
+    d = d[np.isfinite(d)]
+    n = d.size
+    if n < 2:
+        return (float(np.mean(d)) if n else float("nan"), float("nan"))
+    sd = float(np.std(d, ddof=1))
+    mean_d = float(np.mean(d))
+    if sd == 0.0:
+        # Identical every seed -> no difference; a nonzero constant gap is
+        # deterministic separation, reported as p = 0 rather than a divide error.
+        return mean_d, (1.0 if mean_d == 0.0 else 0.0)
+    t_stat = mean_d / (sd / np.sqrt(n))
+    try:
+        from scipy import stats
+        p = float(2.0 * (1.0 - stats.t.cdf(abs(t_stat), n - 1)))
+    except Exception:
+        p = float("nan")
+    return mean_d, p
+
+
+def write_overall_metrics(runs: Sequence[MethodRun], instances,
+                          reference: str = "2d_auto") -> None:
     """Fig. 13 - mean and 95% CI of energy + per-class QoS across realizations.
 
     With a single city realization there is no across-seed spread, so the CI is
     reported as 0.0 rather than invented. Pass several ``--city-seeds`` to get a
     real interval.
+
+    Alongside the summary this now persists the PER-SEED samples and a paired
+    t-test against ``reference``. Storing only (mean, ci95) discarded the pairing
+    and forced any later analysis into a weaker unpaired test that could not be
+    recomputed, because the raw values were gone.
     """
     metric_keys = ["energy", "high", "medium", "low"]
     means = np.zeros((len(runs), len(metric_keys)), float)
     ci95 = np.zeros_like(means)
+    n_seeds = 0
+    per_seed: Dict[str, np.ndarray] = {}
 
     for i, run in enumerate(runs):
         per_city = [class_satisfaction(t, inst)
@@ -590,13 +669,35 @@ def write_overall_metrics(runs: Sequence[MethodRun], instances) -> None:
         }
         for j, key in enumerate(metric_keys):
             values = np.asarray(samples[key], float)
+            per_seed[f"samples_{run.key}_{key}"] = values
+            n_seeds = max(n_seeds, values.size)
             means[i, j] = float(np.nanmean(values))
             if values.size > 1:
                 sem = np.nanstd(values, ddof=1) / np.sqrt(values.size)
-                ci95[i, j] = float(1.96 * sem)
+                ci95[i, j] = float(_t_crit(values.size - 1) * sem)
+
+    # Paired tests vs the reference baseline, same seed set on both sides.
+    method_keys = [r.key for r in runs]
+    pvals = np.full((len(runs), len(metric_keys)), np.nan)
+    if reference in method_keys:
+        for i, mkey in enumerate(method_keys):
+            if mkey == reference:
+                continue
+            for j, key in enumerate(metric_keys):
+                ours = per_seed.get(f"samples_{mkey}_{key}")
+                base = per_seed.get(f"samples_{reference}_{key}")
+                if ours is None or base is None or ours.size != base.size:
+                    continue
+                _, p = _paired_t_test(ours, base)
+                pvals[i, j] = p
+
     _save_npz("overall_metrics.npz",
-              methods=np.array([r.key for r in runs]),
-              metrics=np.array(metric_keys), means=means, ci95=ci95)
+              methods=np.array(method_keys),
+              metrics=np.array(metric_keys), means=means, ci95=ci95,
+              pvalues=pvals, n_seeds=np.asarray(int(n_seeds)),
+              ci_method=np.asarray("student-t two-sided 95%"),
+              paired_reference=np.asarray(reference),
+              **per_seed)
 
 
 def max_achievable_rate(trainer) -> float:
@@ -645,8 +746,11 @@ def write_pareto(trainer, instances, chan, runs: Sequence[MethodRun],
         """(energy Wh, high-QoS %) for one method at one target floor."""
         if run.key == "2d_auto":
             metrics = run_2d_auto(trainer, instance, trainer.fixed_alt)
-        elif run.key == "3d_gnn":
-            metrics = run_blind_3d(trainer, instance, chan)
+        elif run.key == "two_stage":
+            metrics = run_two_stage(trainer, instance, chan)
+        elif run.key == "coupled_greedy":
+            metrics = run_coupled(trainer, instance, chan, strong=False,
+                                  rmin_override=rmin)
         else:
             metrics = run_coupled(trainer, instance, chan,
                                   strong=not fast, rmin_override=rmin)
@@ -658,10 +762,11 @@ def write_pareto(trainer, instances, chan, runs: Sequence[MethodRun],
                 class_satisfaction(trace, instance)["high"])
 
     for run in runs:
-        # 2D-AUTO and Blind-3D never read the QoS floor, so they do not trace a
-        # frontier at all: they are a single operating point. Evaluating them
-        # once is both honest and much cheaper than re-running them per scale.
-        responds_to_floor = run.key == "atom3d"
+        # 2D-AUTO never reads the QoS floor, so it does not trace a frontier at
+        # all: it is a single operating point. Evaluating it once is both honest
+        # and much cheaper than re-running it per scale. The coupled family and
+        # two-stage DO consume the floor, so each traces its own curve.
+        responds_to_floor = run.key in ("atom3d", "coupled_greedy", "two_stage")
         if not responds_to_floor:
             energy, satisfaction = evaluate(run, base_rmin)
             curves[run.key] = {"energy": [energy], "satisfaction": [satisfaction],
@@ -835,8 +940,12 @@ def main() -> None:
     runs = [
         MethodRun("2d_auto", f"2D-AUTO ({two_d_alt:.0f} m)",
                   "per-node NN+2-opt tour at a fixed altitude"),
-        MethodRun("3d_gnn", "Blind-3D (greedy cover)",
-                  "QoS-blind greedy footprint cover; NOT a trained GNN policy"),
+        MethodRun("two_stage", "Two-Stage (decoupled)",
+                  "QoS-blind cover, then shallow repair hovers; the standard "
+                  "decoupled approach this paper's coupling is measured against"),
+        MethodRun("coupled_greedy", "Coupled-Greedy (ablation)",
+                  "QoS-aware coupled planner WITHOUT the local search; an "
+                  "ablation of the proposed method, not an independent baseline"),
         MethodRun("atom3d",
                   "ATOM-3D-VoI (learned CMDP)" if args.learned_atom3d else coupled_label,
                   f"trained CMDP policy from {args.learned_atom3d}"
@@ -885,7 +994,9 @@ def main() -> None:
                     if args.learned_atom3d else ("fast" if args.fast else "strong"))
         planners = (
             ("2d_auto", lambda: hovers_2d_auto(instance, two_d_alts[idx])),
-            ("3d_gnn", lambda: hovers_blind_3d(trainer, instance, chan)),
+            ("two_stage", lambda: hovers_two_stage(trainer, instance, chan)),
+            ("coupled_greedy", lambda: hovers_coupled(trainer, instance, chan,
+                                                      strong=False)),
             ("atom3d", (lambda: hovers_learned(trainer, instance,
                                                args.learned_atom3d, params))
                        if args.learned_atom3d else
@@ -944,9 +1055,11 @@ def main() -> None:
         # Figures label their axes from this rather than hardcoding numbers, so
         # a recalibration cannot leave a figure captioned with stale floors.
         "class_floors_bps": dict(CITY_CLASS_FLOORS),
-        "note": ("Deterministic planners on the frozen synthetic city. Slots "
-                 "'3d_gnn' and 'atom3d' are NOT learned policies yet - see "
-                 "each slot's 'source'."),
+        "note": ("Deterministic planners on the frozen synthetic city. No slot "
+                 "holds a learned policy - see each slot's 'source'. "
+                 "'two_stage' is the baseline the contribution is measured "
+                 "against; 'coupled_greedy' is an ablation of 'atom3d', not an "
+                 "independent method."),
     })
     print("\n[export] done. Figures 3, 5, 6, 7, 8, 9, 10, 13 now load real data.")
     print("         Figures 4, 11, 12 keep their PLACEHOLDER stamp (need training).")

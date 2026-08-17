@@ -7,7 +7,7 @@ Empirical CDF of the per-node achieved data rate for HIGH-priority nodes,
 one curve per policy, log-scaled rate axis, with the 38 Mbps QoS floor as a
 vertical reference. Message: ATOM-3D-VoI shifts the entire distribution to
 the right - only ~10 % of its high-priority nodes fall below the floor,
-versus ~24 % (2D-AUTO) and ~30 % (3D-GNN), consistent with Figure 5.
+versus ~24 % (2D-AUTO) and ~17 % (Two-Stage), consistent with Figure 5.
 
 DATA
 ----
@@ -27,7 +27,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from common_style import setup_style, COLORS
-from common_plot import save_figure, apply_labels
+from common_plot import save_figure, apply_labels, present_methods
 
 
 # =============================================================================
@@ -43,7 +43,8 @@ QOS_FLOOR_MBPS = 38.0     # high-priority rate floor (DATA_SPEC)
 
 METHOD_STYLE = [
     ("2d_auto", "2D-AUTO", "#9E9E9E", "--", 1.6),
-    ("3d_gnn", "3D-GNN", "#FB8C00", "-.", 1.8),
+    ("two_stage", "Two-Stage (decoupled)", "#FB8C00", "-.", 1.8),
+    ("coupled_greedy", "Coupled-Greedy (ablation)", "#64B5F6", (0, (3, 1, 1, 1)), 1.6),
     ("atom3d", "ATOM-3D-VoI (Ours)", COLORS["ours"], "-", 2.6),
 ]
 
@@ -62,7 +63,7 @@ def generate_placeholder_rate_samples(n=2000, seed=23):
     38 Mbps matches Figure 5 exactly:
         ATOM-3D-VoI  P(rate < 38) = 0.10   (90 % satisfied)
         2D-AUTO      P(rate < 38) = 0.24   (76 % satisfied)
-        3D-GNN       P(rate < 38) = 0.30   (70 % satisfied)
+        Two-Stage    P(rate < 38) = 0.17   (83 % satisfied)
     Schema: {method_key: (n,) float array of Mbps, "placeholder": True}
     """
     rng = np.random.default_rng(seed)
@@ -71,7 +72,8 @@ def generate_placeholder_rate_samples(n=2000, seed=23):
     params = {
         "atom3d": (0.35, -1.2816),   # 10th percentile at the floor
         "2d_auto": (0.45, -0.7063),  # 24th percentile
-        "3d_gnn": (0.50, -0.5244),   # 30th percentile
+        "two_stage": (0.44, -0.9542),       # 17th percentile
+        "coupled_greedy": (0.38, -1.1264),  # 13th percentile
     }
     data = {}
     for m, (sigma, z) in params.items():
@@ -102,7 +104,8 @@ def load_rate_results():
 def plot_rate_cdf(data):
     fig, ax = plt.subplots(figsize=(7.4, 5.0))
 
-    for key, label, color, ls, lw in METHOD_STYLE:
+    style = present_methods(METHOD_STYLE, data)
+    for key, label, color, ls, lw in style:
         x = np.sort(np.asarray(data[key], float))
         cdf = np.arange(1, len(x) + 1) / len(x)
         ax.semilogx(x, cdf, color=color, ls=ls, lw=lw, label=label,
@@ -114,7 +117,7 @@ def plot_rate_cdf(data):
     ax.text(QOS_FLOOR_MBPS * 1.06, 0.03, "QoS floor\n38 Mbps", fontsize=8,
             color="#E53935", ha="left", va="bottom")
 
-    for key, label, color, *_ in METHOD_STYLE:
+    for key, label, color, *_ in style:
         x = np.asarray(data[key], float)
         frac = float((x < QOS_FLOOR_MBPS).mean())
         ax.scatter(QOS_FLOOR_MBPS, frac, s=34, facecolor=color,
