@@ -67,12 +67,17 @@ test, plus the explicit ours-vs-Two-Stage comparison.
 - **Do not claim an energy saving.** Energy is equalised by construction. The
   residual gap is hover granularity (both methods underspend B; ours underspends
   more because its hovers are chunkier).
-- **Do not claim a win on low priority.** p=0.16 vs 2D-AUTO. Say "without
-  degrading" instead.
-- **Do not claim "coupling beats decoupling" as the mechanism.** Coupled-Greedy
-  (51.6% high) does *not* beat Two-Stage (55.0%). The gain comes from coupling
-  **plus the continuous-altitude local search**; the ablation proves this, and
-  claiming otherwise is contradicted by our own Fig. 5.
+- **Low priority vs 2D-AUTO is only marginal** (+7.5, t p=0.023, Wilcoxon
+  p=0.0486 — right at the line at n=20). Do not lead with it. "Without
+  degrading low-priority service" remains the safe phrasing against 2D. The
+  large low-priority gain (+21.5) is against **Two-Stage**, and that one is
+  robust.
+- **Do not claim "coupling beats decoupling" as the mechanism.** At n=20
+  Coupled-Greedy and Two-Stage tie on the critical class at **exactly 54.9%
+  (diff +0.00, p=1.000)**. Coupling alone buys nothing there; the entire
+  critical-QoS advantage (+15.3) comes from the **continuous-altitude local
+  search**. State the refinement as the mechanism — the ablation supports that
+  precisely, and the alternative claim is contradicted by our own Fig. 5.
 - **Report the local search's cost honestly** (~30 min per city at N=500). It is
   load-bearing, not a refinement.
 - **Do not describe any altitude as learned.** Every checkpoint to date has its
@@ -83,10 +88,18 @@ test, plus the explicit ours-vs-Two-Stage comparison.
 
 ---
 
-## Secondary result
+## Secondary result — SETTLED at n=20 (2026-08-18)
 
-Ours vs Two-Stage, paired, n=10: high +12.4 (p=0.033, Wilcoxon p=0.063),
-low +22.2 (p=0.0006), medium +5.0 (n.s.), energy comparable (n.s.). Only low
-priority is robustly significant; high is borderline and the per-seed
-differences include four exact ties. **More seeds would firm this up** — say so
-rather than overstating it.
+Ours vs Two-Stage, paired, n=20 — **significant on all three QoS classes at
+statistically indistinguishable energy**:
+
+| class | Two-Stage | Ours | diff | t p | Wilcoxon p | wins |
+|---|---|---|---|---|---|---|
+| high | 54.9% | 70.2% | +15.3 | 0.0009 | 0.0015 | 14/20 |
+| medium | 66.8% | 80.8% | +14.1 | 0.0013 | 0.0010 | 19/20 |
+| low | 52.7% | 74.2% | +21.5 | <0.0001 | 0.0001 | 19/20 |
+| energy | 79.4 kJ | 78.5 kJ | −0.9 | 0.33 | 0.50 | — |
+
+The borderline n=10 result (high p=0.033/0.063) resolved cleanly. Both the
+t-test and the rank test now agree on every class, so the earlier
+outlier-sensitivity caveat no longer applies.

@@ -18,7 +18,7 @@
     }
   },
   "generated_by": "atom_3d.experiments.export_figure_data",
-  "generated_at": "2026-08-17 21:29:32",
+  "generated_at": "2026-08-18 03:24:05",
   "city_seeds": [
     42,
     43,
@@ -29,7 +29,17 @@
     48,
     49,
     50,
-    51
+    51,
+    52,
+    53,
+    54,
+    55,
+    56,
+    57,
+    58,
+    59,
+    60,
+    61
   ],
   "two_d_altitude_m": 47.41133499145508,
   "two_d_altitude_m_per_seed": {
@@ -42,7 +52,17 @@
     "48": 49.33467483520508,
     "49": 50.0,
     "50": 46.050079345703125,
-    "51": 50.0
+    "51": 50.0,
+    "52": 50.0,
+    "53": 50.0,
+    "54": 49.400508880615234,
+    "55": 50.0,
+    "56": 49.88923645019531,
+    "57": 48.479515075683594,
+    "58": 50.0,
+    "59": 49.77363586425781,
+    "60": 50.0,
+    "61": 49.27366638183594
   },
   "energy_budget_kj": 82.65323828125,
   "regime": "budget-constrained (Q4/Q6): every method flies until the mission energy budget B = 83 kJ is spent, so energy is comparable by construction and the comparison is the QoS that budget buys. QoS below 100% means the budget ran out, not that a constraint was violated.",
