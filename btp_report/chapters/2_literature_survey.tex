@@ -49,12 +49,18 @@ with $c_d \ll mg/\eta$. This is what prevents a planner from descending casually
 \section{Altitude Optimisation and Aerial Coverage}
 \label{sec:lit_altitude}
 
-The most directly relevant treatment of altitude appears in the aerial base station literature. Al-Hourani, Kandeepan and Lardner \cite{alhourani2014optimal} derived an optimal height for a low-altitude platform serving a ground area, and identified the trade-off that recurs throughout this work: greater height enlarges the geometric footprint but lengthens every link, and the opposing effects produce an interior optimum. Mozaffari et al. \cite{mozaffari2017mobile} extended the reasoning to energy-efficient collection, and their survey \cite{mozaffari2019tutorial} consolidates the placement literature. A widely used simplification models the served region of a hover as a cone,
+The most directly relevant treatment of altitude appears in the aerial base station literature. Al-Hourani, Kandeepan and Lardner \cite{alhourani2014optimal} derived an optimal height for a low-altitude platform serving a ground area, and identified the trade-off that recurs throughout this work: greater height enlarges the geometric footprint but lengthens every link, and the opposing effects produce an interior optimum. Mozaffari et al. \cite{mozaffari2017mobile} extended the reasoning to energy-efficient collection, and their survey \cite{mozaffari2019tutorial} consolidates the placement literature.
+
+The particular algebraic form adopted in this report is taken from Liu et al. \cite{paperB}, who study a three-dimensional trajectory for an aerial platform performing integrated sensing and communication. Their location constraint requires that a node lie within the angular reach of the platform,
 \begin{equation}
-\rho_{i}^{2} \le \left( (H - z_i)\tan\theta \right)^{2} ,
+\omega_k(q) \left[ (x_u(q) - x_k)^2 + (y_u(q) - y_k)^2 \right] \le \left( H_u(q)\tan\theta \right)^{2} ,
 \label{eq:cone}
 \end{equation}
-with $\rho_i$ the horizontal separation, $H$ the hover altitude, $z_i$ the sensor elevation and $\theta$ the half-beamwidth.
+which after accounting for ground elevation is the relation used in Chapter~\ref{chap:method}.
+
+The interpretation, however, differs from theirs in a way that should be stated plainly, since it bears on what this report may claim as its own. In \cite{paperB}, $\theta$ is the maximum \emph{radar detection angle} of the platform, and the constraint is gated by the binary scheduling variable $\omega_k(q)$ under $\sum_k \omega_k(q) + b(q) = 1$: at any instant the platform is either sensing exactly one node or uploading data. Equation~\eqref{eq:cone} is therefore a pointing constraint on a single scheduled target, and the terms \emph{footprint}, \emph{beamwidth} and \emph{coverage cone} do not appear in that work at all.
+
+The present report reinterprets the same geometry as a communication footprint within which a hover may serve \emph{several} sensors simultaneously. That reinterpretation is not cosmetic: it is what creates the trade-off the contribution rests upon. If a hover serves one sensor at a time, as in both \cite{paperA} and \cite{paperB}, then climbing brings no benefit and the optimal altitude is simply the lowest one permitted. Only when a single hover can cover a group does height buy anything, and only then does the opposition between coverage and link quality described in Section~\ref{sec:tension} arise.
 
 A distinction should be drawn between that literature and the present problem. Base station placement concerns a static deployment of aircraft maximising coverage or sum rate: the altitude is chosen once and the platform remains there. A collection mission visits many hover positions in sequence, and there is no reason for the altitude to be the same at each. The published treatments therefore establish that an optimum height exists for a \emph{given} served set, but do not address decomposing a deployment into served sets and selecting a height for each. That joint problem is what Chapter~\ref{chap:method} formulates.
 

@@ -47,12 +47,14 @@ of it. Equation~\eqref{eq:dmax} converts an abstract quality requirement into a 
 
 \subsection{Coverage geometry}
 
-The third relation describes how many sensors one hover can reach. Modelling the antenna pattern as a cone of half-beamwidth $\theta = 60^{\circ}$, sensor $i$ at horizontal separation $\rho_i$ lies within the footprint of a hover at altitude $H$ when
+The third relation describes how many sensors one hover can reach. Following the angular reach constraint of \cite{paperB} and accounting for ground elevation, sensor $i$ at horizontal separation $\rho_i$ lies within the footprint of a hover at altitude $H$ when
 \begin{equation}
 \rho_i \le (H - z_i)\tan\theta ,
 \label{eq:cone2}
 \end{equation}
-so the footprint widens linearly with height above the sensor.
+with $\theta = 60^{\circ}$, so the footprint widens linearly with height above the sensor.
+
+As noted in Section~\ref{sec:lit_altitude}, Equation~\eqref{eq:cone2} is used here as a \emph{multi-sensor} footprint, whereas both source formulations serve one device per hover. This is the modelling decision that gives altitude something to trade: were each hover restricted to a single sensor, Equation~\eqref{eq:cone2} would never bind and the optimal altitude would be the lowest the clearance permits.
 
 \subsection{The governing tension}
 \label{sec:tension}
