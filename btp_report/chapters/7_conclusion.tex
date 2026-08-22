@@ -1,0 +1,59 @@
+\chapter{Conclusion and Future Scope}
+\label{chap:conclusion}
+\noindent \rule{6.6in}{0.01in}
+\minitoc
+\newpage
+
+\section{Summary}
+
+This project began from a two-dimensional aerial collection framework in which the aircraft holds one cruise altitude for the whole sortie, and asked what that simplification costs once sensors are permitted to differ in importance.
+
+The answer is that it costs everything on the class that matters most, for a reason that is geometric rather than algorithmic. A fixed cruise altitude must clear the tallest structure on the map, which here forces approximately $47$~m, while inverting the rate expression shows that the most demanding class can only be served from within about $21$~m. The two cannot both be satisfied. The planar baseline serves $0.6\%$ of its critical sensors not because its route is poor but because no route would serve them.
+
+Making altitude a per-hover decision, constrained by per-sensor rate floors and followed by a continuous refinement of the resulting altitudes, raises critical satisfaction to $70.2\%$ at the same energy budget, winning on all twenty layouts tested. Against a decoupled three-dimensional baseline with the same altitude freedom, the method remains significantly better on all three classes at statistically indistinguishable energy.
+
+The ablation produced the least expected and most useful result. Deciding placement and altitude jointly, by itself, delivers no improvement whatever on the critical class: the coupled-greedy variant and the decoupled baseline coincide at $54.9\%$, with a mean paired difference of zero. The whole of the advantage is attributable to the refinement stage. What this work demonstrates is therefore altitude refinement under quality constraints, not joint decision-making as such, and the roughly thirty minutes of computation the refinement requires is a genuine cost of the method rather than an implementation detail.
+
+One objective was not met. The learned constrained policy did not train successfully, for the three separate reasons documented in Section~\ref{sec:tasks_rl}, and no learned component contributes to any result reported here. This is recorded as an unmet objective rather than presented as a limitation of scope, because it was an intended outcome at the start of the project.
+
+\section{Limitations}
+
+\textbf{Computational cost.} The refinement requires approximately thirty minutes per layout at $N = 500$, which is acceptable for a mission planned in advance but precludes replanning in flight. Since the refinement supplies the entire critical-class advantage, the cost cannot be avoided by omitting the stage.
+
+\textbf{Single environment.} All results derive from one city generator; robustness across building densities, elevation distributions and map scales is untested.
+
+\textbf{Simplified propagation.} Line-of-sight with an urban exponent, without blockage, shadowing or interference.
+
+\textbf{Static deployment.} Sensors neither move, fail nor appear during a mission, and no disturbance such as wind is modelled.
+
+\textbf{Single aircraft.} Multi-aircraft partitioning exists in the implementation but is not evaluated.
+
+\textbf{Marginal low-priority result.} The improvement over the planar baseline on the low-priority class is only marginally significant, and is claimed here as non-degradation rather than as a gain.
+
+\section{Future Scope}
+
+\subsection{Immediate}
+
+\textbf{Recovering the learned policy.} The diagnosis in Section~\ref{sec:tasks_rl} is complete and quantitative, which makes this the most tractable outstanding item. The effective learning rate reaching the altitude head decayed to order $10^{-10}$; correcting the rate and its decay schedule, updating per batch rather than once per epoch, and gating the run on whether the altitude bias has moved measurably by epoch fifty would address the identified causes. The motivation is practical: a trained policy would produce a plan in milliseconds rather than thirty minutes, addressing the principal weakness of the present system.
+
+\textbf{Accelerating the refinement.} Independently of learning, the local search re-evaluates cluster energies from scratch after each candidate move. Incremental evaluation, or restricting moves to spatial neighbourhoods, should yield a substantial speed-up.
+
+\textbf{Energy--quality frontier.} Sweeping the mission budget and recording the resulting satisfaction would characterise the trade-off directly. This was attempted, but the available data belonged to the superseded serve-everything regime and was withdrawn rather than reported.
+
+\textbf{Environmental robustness.} Repeating the campaign across generators with differing densities and elevation profiles would establish whether the reported margins are characteristic or particular to this configuration.
+
+\subsection{Medium and longer term}
+
+\textbf{Multiple aircraft.} Partitioning a deployment among several aircraft raises load-balancing questions the single-aircraft formulation does not encounter, since critical sensors are spatially clustered and an even geographic partition need not be an even partition of criticality.
+
+\textbf{Probabilistic propagation.} Replacing the line-of-sight assumption with a blockage model would make altitude selection a decision under uncertainty. This is arguably the extension that would most improve realism, since it introduces a second reason to climb that the present model omits.
+
+\textbf{Freshness objectives.} Where data arrives continuously rather than in a single batch, Age of Information \cite{kaul2012real} becomes the appropriate measure and the problem acquires a scheduling dimension alongside the geometric one.
+
+\textbf{Online replanning and physical validation.} Replanning in response to sensor failures presupposes the fast planner discussed above; and every result in this report is obtained in simulation, so the energy model, however standard, has not been checked against a real airframe.
+
+\section{Closing Remarks}
+
+The most useful lesson of this project concerned experimental design rather than trajectory planning. Two separate versions of the evaluation produced results that were internally consistent and yet carried no information: the first because hard quality constraints made the reported satisfaction identically one, the second because a floor calibrated to a service radius larger than the map could not be violated. In both cases the figures were plausible and the code was correct. What was wrong was the question being asked of the data.
+
+The same pattern recurred in the training work, where a policy that had not moved from its initialisation nonetheless reported a satisfaction figure that would have looked entirely respectable had the weights not been inspected. In each instance the error was found by asking whether the measured quantity was capable of taking a different value, rather than by asking whether the number looked reasonable. That test proved considerably more informative than inspecting the results themselves, and it is the practice this project would carry forward.

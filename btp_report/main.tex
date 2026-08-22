@@ -1,0 +1,156 @@
+\documentclass[12pt,phd,times]{pkmthesis}
+
+\usepackage{amsmath,amssymb,epsfig,graphicx,setspace,url,float}
+\usepackage{colortab,pifont}
+\usepackage{lscape,multicol,multirow,longtable}
+\usepackage{cite, bm}
+\usepackage{geometry}
+\usepackage{array}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{multirow}
+\usepackage{tabularx}
+\usepackage{graphicx}
+\usepackage{subcaption}
+\usepackage{booktabs}
+\usepackage[english]{babel}
+\usepackage[small,bf]{caption}
+\usepackage{csquotes}
+\usepackage{threeparttable}
+\setlength{\textfloatsep}{1cm}
+\normalem
+\setlength{\abovecaptionskip}{8pt}
+\setlength{\belowcaptionskip}{8pt}
+\usepackage{hyperref}
+\usepackage{extra_functions}
+\input{pagesetup_pkm_middleside.tex}
+\raggedbottom
+
+\graphicspath{{figures/}}
+
+\begin{document}
+\setcounter{page}{1} \pagenumbering{roman}
+\doublespacing
+
+%*************************************** FRONT PAGES ***************************************
+\thispagestyle{empty}
+\pdfbookmark{Title}{Title}
+\include{FrontPages/title_page}
+\thispagestyle{empty}
+\clearpage
+
+\thispagestyle{empty}
+\pdfbookmark{Declaration}{Declaration}
+\include{FrontPages/Certificate}
+\newpage
+\thispagestyle{empty}
+\clearpage
+
+\thispagestyle{empty}
+\pdfbookmark{Acknowledgement}{Acknowledgement}
+\include{FrontPages/Acknowledgement}
+\thispagestyle{empty}
+\clearpage
+
+\thispagestyle{empty}
+\pdfbookmark{Abstract}{Abstract}
+\include{FrontPages/Abstract}
+\thispagestyle{empty}
+\clearpage
+
+%..........................................................................................
+\clearpage
+\thispagestyle{empty}
+\dominitoc
+\dominilof
+\dominilot
+\fancyhf{} \fancyhead[LE]{\bfseries\small{\leftmark}}
+\fancyhead[RO]{\bfseries\small{\rightmark}}
+\fancyfoot[CE,CO]{\bfseries\thepage}
+%..........................................................................................
+\renewcommand{\baselinestretch}{1}
+\pdfbookmark[0]{Index}{index}
+\pdfbookmark[1]{Contents}{toc}
+\fancyhead[LE]{\bfseries\small{Contents}}
+\fancyhead[RO]{\bfseries\small{Contents}}
+\tableofcontents
+\clearpage
+%..........................................................................................
+\pdfbookmark[1]{List of Figures}{lof}
+\addstarredchapter{List of Figures}
+\fancyhead[LE]{\bfseries\small{List of Figures}}
+\fancyhead[RO]{\bfseries\small{List of Figures}}
+\listoffigures
+\clearpage
+%..........................................................................................
+\pdfbookmark[1]{List of Tables}{lot}
+\addstarredchapter{List of Tables}
+\fancyhead[LE]{\bfseries\small{List of Tables}}
+\fancyhead[RO]{\bfseries\small{List of Tables}}
+\listoftables
+\clearpage
+%..........................................................................................
+\fancyhead[LE]{\bfseries\small{List of Acronyms}}
+\fancyhead[RO]{\bfseries\small{List of Acronyms}}
+\pdfbookmark[1]{List of Acronyms}{loa}
+\addstarredchapter{List of Acronyms}
+\include{FrontPages/Acronyms}
+\clearpage
+%..........................................................................................
+\fancyhf{}
+\fancyhead[LE]{\bfseries\small{\leftmark}}
+\fancyhead[RO]{\bfseries\small{\rightmark}}
+\fancyfoot[CE,CO]{\bfseries\thepage}
+\setcounter{page}{1} \pagenumbering{arabic}
+\renewcommand{\labelenumi}{(\roman{enumi})}
+
+%*************************************** CHAPTERS ***************************************
+\include{chapters/1_introduction}
+\clearpage
+\thispagestyle{empty}
+\newpage
+
+\include{chapters/2_literature_survey}
+\clearpage
+\thispagestyle{empty}
+\newpage
+
+\include{chapters/3_objectives}
+\clearpage
+\thispagestyle{empty}
+\newpage
+
+\include{chapters/4_methodology}
+\clearpage
+\thispagestyle{empty}
+\newpage
+
+\include{chapters/5_tasks_completed}
+\clearpage
+\thispagestyle{empty}
+\newpage
+
+\include{chapters/6_results}
+\clearpage
+\thispagestyle{empty}
+\newpage
+
+\include{chapters/7_conclusion}
+\clearpage
+\thispagestyle{empty}
+\newpage
+
+\addtocounter{page}{-1}
+\appendix
+
+%*************************************** BIBLIOGRAPHY ***************************************
+\fancyhead[LE]{\bfseries\small{Bibliography}}
+\fancyhead[RO]{\bfseries\small{Bibliography}}
+\pdfbookmark[1]{Bibliography}{bib}
+\addstarredchapter{Bibliography}
+\baselineskip 14pt
+\small
+\bibliographystyle{IEEEtran}
+\bibliography{references}
+
+\end{document}

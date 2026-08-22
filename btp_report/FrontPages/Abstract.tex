@@ -1,0 +1,20 @@
+{\renewcommand{\baselinestretch}{1.5}
+\begin{center}
+	{\Large\bf{Abstract}}
+\end{center}
+\vspace{0.4cm}
+
+\noindent Unmanned aerial vehicles are now a practical way of gathering data from sensors that are scattered across a city and have no reliable network of their own. Most existing planners treat this as a routing problem in the plane: the aircraft holds one cruising height for the whole sortie and the only real decision is the order in which sensors are visited. This report argues that the fixed height is not a harmless simplification but the binding limitation, and that it becomes visible as soon as the sensors are allowed to differ in importance.
+
+\vspace{0.2cm}
+\noindent The argument is a geometric one. A single cruise altitude has to clear the tallest structure on the map, which in the city model used here forces roughly $47$~m. Inverting the Shannon expression for the urban channel adopted in this work shows that a sensor demanding $38$~Mbps can only be served from within about $21$~m. An aircraft pinned above the skyline therefore cannot serve such a sensor at all, however carefully its route is optimised. The failure is one of physics rather than of search.
+
+\vspace{0.2cm}
+\noindent Accordingly, the two-dimensional formulation is extended so that hover placement and hover altitude are decided jointly, with a per-sensor rate floor entering as a hard feasibility constraint, and the resulting altitudes are then refined by a continuous local search. Comparison is carried out under a fixed mission energy budget, so that every method expends approximately the same energy and the quantity that distinguishes them is the service quality that the budget purchases.
+
+\vspace{0.2cm}
+\noindent Across twenty independently generated city layouts, the proposed planner raises satisfaction on the most critical class of sensors from $0.6\%$ to $70.2\%$ relative to the two-dimensional baseline, winning on all twenty layouts ($p<0.0001$, paired test), while medium-priority satisfaction improves from $61.0\%$ to $80.8\%$. Against a strong decoupled three-dimensional baseline, which places hovers first and repairs infeasible links afterwards, the method remains significantly better on all three priority classes at statistically indistinguishable energy. An ablation isolates the source of the gain: coupling on its own reproduces the decoupled baseline exactly on the critical class, at $54.9\%$ in both cases, and the entire advantage is attributable to the continuous altitude refinement. This last observation is reported as a constraint on what may be claimed, and the roughly thirty minutes of planning time the refinement requires is stated as a genuine cost of the approach rather than omitted.
+
+\vspace{0.2cm}
+\noindent \textbf{Keywords:} UAV trajectory planning, Internet of Things, quality of service, energy budget, altitude optimisation, priority-aware data collection.
+}

@@ -1,0 +1,93 @@
+\chapter{Tasks Completed}
+\label{chap:tasks}
+\noindent \rule{6.6in}{0.01in}
+\minitoc
+\newpage
+
+This chapter records the work carried out, including the approaches abandoned as well as those retained. In this project most of the effort went not into constructing the planner but into discovering that successive versions of the experiment were measuring something other than what they appeared to measure, and a reader who sees only the final design cannot judge whether the design choices were reasonable.
+
+\section{Environment and Model Implementation}
+
+The city generator produces a $1000 \times 1000$~m region containing $126$ buildings of varying footprint and height, together with a road network and designated sites around which critical infrastructure is concentrated. Sensor positions, elevations, data volumes and criticality assignments derive from a seed, so a layout is exactly reproducible and every method can be evaluated on identical instances. That property is what permits the paired tests of Chapter~\ref{chap:results}.
+
+The channel, coverage and energy models were implemented and verified against hand calculations across a range of separations. The rotary-wing curve was checked to confirm that its minimum lies at non-zero airspeed and that the hover value is its maximum, since the entire case for descending depends on that ordering.
+
+\section{Establishing that Altitude Matters}
+\label{sec:tasks_altitude}
+
+The first working planner treated altitude as a free decision and minimised total energy. It converged to a policy that flew at the maximum permitted altitude and never varied.
+
+The behaviour was correct rather than defective. The energy model then in use charged propulsion at a constant rate and hovering cheaply, so a weak link imposed no penalty beyond a longer hover, and a longer hover was inexpensive, whereas descending cost climb energy and narrowed the footprint. Flying as high as permitted was genuinely optimal for the model as written, and no amount of tuning would have produced descent.
+
+The correction was to adopt the rotary-wing curve of Equation~\eqref{eq:pv}, under which hovering is the most expensive state available. A weak link then becomes expensive rather than merely slow, and descending acquires a reason to occur. This change made the remainder of the project possible.
+
+\section{Calibrating the Propagation Model}
+\label{sec:tasks_alpha}
+
+A second obstacle appeared once altitude had been made meaningful: varying the hover altitude across its whole permitted range altered achievable rate by only about a quarter of its value, too small a variation for the class floors to bind differently.
+
+The cause was saturation. With a free-space exponent $\alpha = 2$ the signal-to-noise ratio over the relevant geometry lay between roughly $53$ and $71$~dB, and inside a logarithm differences of that magnitude produce very little change in rate. Adopting $\alpha = 3$, standard for an urban environment with shadowing, spread the achievable band to approximately $86\%$ of its range and made altitude a genuine lever. To confirm this was not an artefact of one exponent, the priority gain was measured across $\alpha \in [2.5, 3.5]$ and found to vary smoothly over a plateau without threshold behaviour.
+
+\section{Removing Wireless Power Transfer}
+\label{sec:tasks_wpt}
+
+The base framework includes wireless power transfer, in which the aircraft charges the sensors as well as collecting from them. This was implemented and then deliberately disabled.
+
+The charging time required at a hover grows with the square of the separation, exerting a strong downward pressure on altitude that has nothing to do with criticality. With power transfer active the aircraft descends because charging demands it, and any improvement in critical service is confounded with that effect. Since the contribution concerns priority-driven altitude selection, retaining a second and stronger altitude driver would have made the claim impossible to isolate. The implementation remains in the codebase behind a configuration flag, but no result in this report uses it.
+
+\section{Correcting the Evaluation Regime}
+
+The most consequential correction concerned the experiment rather than the method.
+
+Under the inherited serve-everything formulation, results were being produced in which every method achieved perfect satisfaction on every class. This was initially read as encouraging. It is in fact a tautology, for the reason given in Section~\ref{sec:regime}: a plan satisfying hard floors necessarily serves every sensor at or above its floor. The headline metric could not distinguish a good plan from a poor one, and considerable effort had been spent optimising against a quantity that was constant. Replacing the requirement with the fixed budget resolved this, since under a budget the methods differ in what they manage to serve before energy is exhausted.
+
+\section{Recalibrating the Quality Floors}
+
+A related defect was found in the floors themselves. The values in use were $38$, $25$ and $8$~Mbps, which by Equation~\eqref{eq:dmax} correspond to service radii of approximately $21$~m, $95$~m and $691$~m.
+
+The third exceeds the size of the map. A requirement that can be met from anywhere in the deployment is not a requirement, so the low-priority floor was measuring only whether a sensor had been visited, not whether it had been served well. Since low-priority sensors constitute $70\%$ of the deployment, the majority of the instance carried no effective constraint while the evaluation nonetheless reported a quality figure for it.
+
+The floors were recalibrated to $38$, $32.5$ and $29$~Mbps, giving radii of $21$, $40$ and $60$~m. Because rate depends on the logarithm of a cubically decaying quantity the usable band is narrow, roughly $25$ to $44$~Mbps, and the revised values distribute the three classes across it so that each binds.
+
+\section{The Learned Policy}
+\label{sec:tasks_rl}
+
+A constrained policy was implemented following Section~\ref{sec:lit_qos}, with an attention encoder, an autoregressive decoder emitting the visiting sequence, a Gaussian head emitting altitude, and one dual variable per class updated by dual ascent. It was trained three times and did not learn. The failures had distinct causes, each instructive.
+
+\subsection{The altitude head could not observe its own selection}
+
+In the first version the altitude head was conditioned only on a summary of the instance formed \emph{before} a sensor was selected, so it had no way of knowing which sensor the decoder had just chosen.
+
+This is fatal. A hover serves its anchor from directly overhead, so the achieved rate there depends on the difference between hover altitude and the elevation of that particular sensor. A head that cannot observe that elevation cannot express altitude as a function of it, and therefore cannot satisfy a per-sensor floor. The policy collapsed to a constant $85.5$~m with a standard deviation of $0.14$~m and scored zero on the high-priority class. The diagnosis was confirmed by inspecting the input width of the head, which was half that required to accept the selected sensor embedding.
+
+\subsection{The feasible region was never sampled}
+
+Conditioning the head on the selection did not by itself change the outcome: the policy continued to score zero after $150$ epochs at two different learning rates.
+
+The cause was initialisation. With a zero-initialised output layer the head produced hover altitudes some $57$ to $80$~m above the sensor being served, whereas the strictest floor permits at most $21$~m of separation. The feasible region lay between $3.4$ and $5.0$ standard deviations below the mean of the initial action distribution. A stochastic policy explores by sampling, and a region that far into the tail is effectively never visited, so the policy never observed the reward for descending. Biasing the output layer so that initial hovers begin inside the feasible band removed the difficulty.
+
+\subsection{The learning rate never reached the head}
+
+After both corrections the policy still failed to improve. Inspection of the saved parameters gave the reason directly: after $500$ epochs the weights of the altitude head matched their initial values to three significant figures.
+
+The configured actor learning rate was $10^{-5}$, decayed by $0.98$ per epoch. Over $500$ epochs the decay multiplies the rate by $0.98^{500} \approx 4.1 \times 10^{-5}$, so the effective rate at the end of training was of order $10^{-10}$ and had been negligible long before. The prediction was checked against the optimiser state stored in the checkpoint: summing the decayed schedule and multiplying by the observed signal-to-noise ratio of the accumulated gradient gives an expected displacement of the output bias of $1.95 \times 10^{-5}$, against $1.43 \times 10^{-5}$ observed. The agreement leaves no residual behaviour to explain.
+
+\subsection{Consequence}
+
+The apparent satisfaction produced by the final checkpoint was therefore the value of the initialisation constant, not a learned quantity, and reporting it as a trained result would have presented a hand-chosen constant as an experimental outcome.
+
+The learned component was accordingly withdrawn, and every result in Chapter~\ref{chap:results} comes from deterministic planners. A regression test now rejects any checkpoint predating the conditioning fix, so an invalid checkpoint cannot silently re-enter the results pipeline, and stored metadata records which procedure produced each curve.
+
+\section{Correcting the Statistical Analysis}
+
+Three defects were identified and corrected. Confidence intervals had been computed with the normal quantile $1.96$; for five layouts the appropriate Student $t$ value is $2.776$, so every published interval had been too narrow by $42\%$. Per-layout results were being discarded once the mean and interval had been formed, which made the appropriate paired test impossible to perform after the fact; the raw values are now retained. Finally, the figures had implied improvement on all three classes when only the high-priority class was then distinguishable, so significance markers derived from the paired tests were added.
+
+\section{Correcting the Baseline}
+
+The three-dimensional baseline originally used was a greedy cover that ignored rate requirements entirely. It achieved between zero and one per cent satisfaction on every class, and comparison against it demonstrated nothing beyond the fact that a method ignoring a constraint fails to satisfy it. Its internal identifier also suggested a learned model, which was misleading, since no network was involved.
+
+It was removed and replaced by the decoupled two-stage planner of Section~\ref{sec:method_twostage}, which represents the natural engineering approach and achieves $54.9\%$ on the critical class. The change materially altered the interpretation of the results: the margin the proposed method must demonstrate is now measured against a competent method rather than a broken one.
+
+\section{Experimental Campaign}
+
+The final campaign evaluated four methods across twenty independently generated layouts under a common budget. Because the refinement stage requires roughly $30$ minutes per layout, a cache keyed on layout, method and cruise altitude was implemented so planning results could be reused across changes to the budget or the figures. The campaign required approximately eight hours of computation in total, comprising $80$ planning runs of $500$ sensors each.

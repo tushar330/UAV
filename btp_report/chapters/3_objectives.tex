@@ -1,0 +1,63 @@
+\chapter{Thesis Objectives and Deliverables}
+\label{chap:objectives}
+\noindent \rule{6.6in}{0.01in}
+\minitoc
+\newpage
+
+\section{Aim}
+
+The aim of the project is to determine whether making altitude a per-hover decision, constrained by per-sensor rate requirements, allows an aerial collection mission to deliver materially better service to its most critical sensors than a fixed-altitude planner achieves at the same energy expenditure.
+
+The aim is phrased as a question because at the outset the answer was not obvious. The geometric argument of Section~\ref{sec:tension} shows that a fixed-altitude planner must fail on the critical class, but it does not establish that a three-dimensional planner will succeed. Descending to serve one sensor costs climb energy, narrows the footprint, and therefore requires more stops. Whether the exchange is favourable is an empirical matter, and it was possible that the additional cost would consume the benefit.
+
+\section{Objectives}
+
+\begin{enumerate}
+\item \textbf{Formulate the three-dimensional problem.} Extend the planar model so that each hover carries its own altitude, subject to a coverage relation, a clearance requirement above any served sensor, and operating bounds. Incorporate criticality through a per-class minimum rate that a link must achieve for a collection to be counted.
+
+\item \textbf{Establish an evaluation regime in which the claim is measurable.} Identify a protocol under which energy and service quality can be compared without one trivially determining the other, and under which the quantity of interest is capable of distinguishing between plans.
+
+\item \textbf{Implement the proposed planner.} Construct a planner that selects hover positions and altitudes jointly under the rate constraints, and refines the resulting altitudes.
+
+\item \textbf{Implement credible baselines.} Provide, in addition to the two-dimensional starting point, a three-dimensional baseline representing the natural engineering solution, so that the contribution is measured against a method that genuinely attempts the task.
+
+\item \textbf{Evaluate with adequate statistical rigour.} Run over a sufficient number of independently generated layouts, apply tests appropriate to the paired design, and report effect sizes and significance for every claim made.
+
+\item \textbf{Isolate the source of any improvement.} Determine, by ablation, which component of the proposed method is responsible for the observed behaviour, so that the mechanism claimed in the report is the mechanism actually operating.
+\end{enumerate}
+
+\section{Deliverables}
+
+\begin{table}[!ht]
+\centering
+\caption{Project deliverables and their status at submission}
+\label{tab:deliverables}
+\begin{tabular}{p{0.8cm}p{8.4cm}p{3.4cm}}
+\toprule
+\textbf{No.} & \textbf{Deliverable} & \textbf{Status} \\
+\midrule
+D1 & Synthetic urban environment generator with buildings, sensor elevations and criticality classes & Complete \\
+D2 & Channel, coverage and rotary-wing energy models & Complete \\
+D3 & Two-dimensional fixed-altitude baseline & Complete \\
+D4 & Decoupled three-dimensional baseline & Complete \\
+D5 & Proposed coupled planner with altitude refinement & Complete \\
+D6 & Energy-budgeted evaluation harness with paired statistics & Complete \\
+D7 & Evaluation over twenty layouts & Complete \\
+D8 & Ablation isolating the refinement stage & Complete \\
+D9 & Publication-quality figures generated from stored results & Complete \\
+D10 & Learned constrained policy & Not achieved; see Section~\ref{sec:tasks_rl} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Deliverable D10 requires comment, since it was an objective at the start of the project and is not delivered.
+
+A constrained policy was implemented and trained on several occasions. It did not learn. Chapter~\ref{chap:tasks} sets out the diagnosis in full, and the conclusion reached was that the altitude head of the trained network remained at its initialisation throughout training. The results reported in Chapter~\ref{chap:results} are therefore produced by deterministic planners, and are labelled as such in the figures and in the stored result metadata. No learned component contributes to any number in this report.
+
+The alternative would have been to report the checkpoint as though it constituted a trained policy. Its measured performance was in fact the value of a constant chosen at initialisation, and presenting that as a learned outcome would have been a misrepresentation. The learning objective is accordingly recorded as unmet and carried forward to Chapter~\ref{chap:conclusion} as the most direct item of future work.
+
+\section{Scope}
+
+The following are within scope: a single aircraft; stationary sensors at known positions; a single synthetic city generator with randomised layouts; line-of-sight propagation with an urban path-loss exponent; deterministic planning with full prior knowledge; and evaluation under a fixed mission energy budget.
+
+The following are outside scope and are not claimed: multiple cooperating aircraft; mobile, failing or newly appearing sensors; wind and other disturbances; probabilistic line-of-sight or blockage modelling; wireless power transfer; real-time replanning; and physical flight trials. Chapter~\ref{chap:conclusion} discusses which of these exclusions most limits the applicability of the results.

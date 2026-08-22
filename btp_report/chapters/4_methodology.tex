@@ -1,0 +1,192 @@
+\chapter{System Architecture and Methodology}
+\label{chap:method}
+\noindent \rule{6.6in}{0.01in}
+\minitoc
+\newpage
+
+\section{System Model}
+
+\subsection{Deployment}
+
+The environment is a square region of side $1000$~m containing buildings of varying footprint and height. A set $\mathcal{N} = \{1,\dots,N\}$ of $N = 500$ sensors is distributed over it. Sensor $i$ occupies position $(x_i, y_i, z_i)$ with elevation $z_i \in [0, 50]$~m, since sensors sit both at ground level and on rooftops, and holds a data volume $D_i$ drawn from $[0.2, 1.5]$~MB. A depot at a fixed corner position serves as origin and destination.
+
+Each sensor is assigned to one of three criticality classes, given in Table~\ref{tab:classes}. The assignment is spatially correlated rather than independent, since critical infrastructure in a real city is clustered: high-priority sensors are concentrated around a small number of designated sites.
+
+\begin{table}[!ht]
+\centering
+\caption{Criticality classes, rate floors and the resulting service radii}
+\label{tab:classes}
+\begin{tabular}{lccc}
+\toprule
+\textbf{Class} & \textbf{Share of $\mathcal{N}$} & \textbf{Rate floor $R^{\min}_c$} & \textbf{Service radius $d^{\max}_c$} \\
+\midrule
+High & $10\%$ & $38.0$~Mbps & $21$~m \\
+Medium & $20\%$ & $32.5$~Mbps & $40$~m \\
+Low & $70\%$ & $29.0$~Mbps & $60$~m \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Communication model}
+
+The aircraft communicates with sensor $i$ over a line-of-sight link. Writing $d_i$ for the three-dimensional separation, the achievable rate is
+\begin{equation}
+R_i = B \log_2\!\left( 1 + \frac{P_T \beta}{d_i^{\alpha}\,\sigma^2} \right),
+\label{eq:rate}
+\end{equation}
+with $B = 2$~MHz the bandwidth, $P_T$ the transmit power, $\beta$ the reference channel gain, $\sigma^2$ the noise power at $-110$~dBm, and $\alpha$ the path-loss exponent. Throughout, $\alpha = 3$, representing an urban environment with shadowing; Section~\ref{sec:tasks_alpha} explains why the free-space value was unusable. The consequence of Equation~\eqref{eq:rate} is that separation is punished cubically.
+
+\subsection{From rate floor to service radius}
+
+Inverting Equation~\eqref{eq:rate} gives the second governing relation. A sensor of class $c$ is served successfully only if $R_i \ge R^{\min}_c$, which holds if and only if the aircraft lies within
+\begin{equation}
+d^{\max}_c = \left( \frac{P_T \beta}{\sigma^2 \left( 2^{R^{\min}_c / B} - 1 \right)} \right)^{1/\alpha}
+\label{eq:dmax}
+\end{equation}
+of it. Equation~\eqref{eq:dmax} converts an abstract quality requirement into a hard geometric constraint, and the entire argument of this report rests on it. The resulting radii appear in Table~\ref{tab:classes}.
+
+\subsection{Coverage geometry}
+
+The third relation describes how many sensors one hover can reach. Modelling the antenna pattern as a cone of half-beamwidth $\theta = 60^{\circ}$, sensor $i$ at horizontal separation $\rho_i$ lies within the footprint of a hover at altitude $H$ when
+\begin{equation}
+\rho_i \le (H - z_i)\tan\theta ,
+\label{eq:cone2}
+\end{equation}
+so the footprint widens linearly with height above the sensor.
+
+\subsection{The governing tension}
+\label{sec:tension}
+
+Equations~\eqref{eq:dmax} and \eqref{eq:cone2} pull in opposite directions. Coverage rewards altitude, since a higher hover reaches more sensors and so needs fewer stops and less horizontal flight. The service radius forbids altitude, since a demanding sensor must be approached closely. The resolution depends on which sensors are being served and differs at every hover, which is the structural reason altitude cannot sensibly be a mission-wide constant.
+
+The magnitude of the conflict is worth stating explicitly. A fixed-altitude mission must clear the tallest structure by $h_{\mathrm{safe}} = 10$~m, giving roughly $47$~m on this map, whereas a high-priority sensor at ground level requires the aircraft within $21$~m. Since $47 > 21$, no such sensor can be served by the planar planner irrespective of its route. The failure reported in Chapter~\ref{chap:results} is therefore a consequence of geometry rather than of search.
+
+\subsection{Energy model}
+
+Total mission energy comprises horizontal flight, vertical motion and hovering,
+\begin{equation}
+E_{\mathrm{total}} = E_{\mathrm{horiz}} + E_{\mathrm{vert}} + E_{\mathrm{hover}} ,
+\label{eq:etotal}
+\end{equation}
+where horizontal flight uses Equation~\eqref{eq:pv} with each leg flown at the speed minimising energy per unit distance,
+\begin{equation}
+E_{\mathrm{horiz}} = \sum_{\ell} L_{\ell} \cdot \min_{V} \frac{P(V)}{V} ,
+\end{equation}
+vertical motion follows Equation~\eqref{eq:evert}, and hovering is charged at the peak power $P_0 + P_i = 168.5$~W for the duration of each collection. Parameters are listed in Table~\ref{tab:params}.
+
+\begin{table}[!ht]
+\centering
+\caption{Principal simulation parameters}
+\label{tab:params}
+\begin{tabular}{llc}
+\toprule
+\textbf{Symbol} & \textbf{Quantity} & \textbf{Value} \\
+\midrule
+$N$ & Number of sensors & $500$ \\
+$B$ & Bandwidth & $2$~MHz \\
+$\sigma^2$ & Noise power & $-110$~dBm \\
+$\alpha$ & Path-loss exponent & $3.0$ \\
+$\theta$ & Antenna half-beamwidth & $60^{\circ}$ \\
+$h_{\mathrm{safe}}$ & Clearance above a served sensor & $10$~m \\
+$H_{\min}, H_{\max}$ & Altitude bounds & $20$~m, $150$~m \\
+$P_0 + P_i$ & Hover power & $168.5$~W \\
+$m$, $\eta$, $c_d$ & Mass, motor efficiency, descent coefficient & $2$~kg, $0.5$, $4$~J\,m$^{-1}$ \\
+$\tau_{\max}$ & Time budget per hover & $30$~s \\
+$B_{\mathrm{mission}}$ & Mission energy budget & $82.65$~kJ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{The Evaluation Regime}
+\label{sec:regime}
+
+The protocol under which the planner is assessed must be established before the planner itself, because an earlier version of this project produced results that were internally consistent and entirely uninformative.
+
+The natural formulation, inherited from the base framework, serves every sensor while minimising energy, treating the rate floors as hard constraints. The difficulty is immediate once stated: if the floors are hard, any feasible plan serves every sensor at or above its required rate and therefore attains $100\%$ satisfaction on every class by construction. Comparing two feasible plans on satisfaction compares two numbers that are both exactly one, and the metric intended to demonstrate the contribution cannot express it.
+
+The remedy is to replace the serve-everything requirement with a fixed mission energy budget
+\begin{equation}
+B_{\mathrm{mission}} = 0.65 \times E^{\mathrm{full}}_{\mathrm{2D}} = 82.65~\text{kJ},
+\end{equation}
+where $E^{\mathrm{full}}_{\mathrm{2D}}$ is the energy the planar baseline needs to cover the whole deployment. Every method flies its own route until the budget is exhausted and is scored on the fraction of each class served at or above its floor.
+
+The consequences determine how Chapter~\ref{chap:results} must be read. Energy becomes an experimental control rather than an outcome, since all methods spend approximately $B_{\mathrm{mission}}$. Service quality becomes the dependent variable, measuring what that budget purchased. Accordingly no energy-saving claim is made anywhere in this report, and the small residual differences in expenditure reflect the granularity of hover placement rather than efficiency, since a partial hover cannot be flown.
+
+\section{Baseline Methods}
+
+\subsection{Planar baseline}
+
+The planar baseline reproduces the fixed-altitude formulation. A single cruise altitude is computed as the maximum structure height plus $h_{\mathrm{safe}}$, one hover is placed above each sensor at that altitude, and the visiting order is produced by nearest-neighbour construction followed by 2-opt improvement \cite{croes1958method}.
+
+\subsection{Decoupled three-dimensional baseline}
+\label{sec:method_twostage}
+
+The decoupled baseline represents the natural engineering response and is the method against which the contribution is principally measured. In its first stage, hovers are placed by a greedy set-cover procedure that ignores rate requirements entirely and seeks only low-energy coverage, which drives it towards high altitudes and wide footprints. In the second, every sensor whose achieved rate falls below its floor is removed from its original hover and re-served by additional shallow hovers placed for that purpose.
+
+This is a strong baseline, deliberately given every advantage. Its weakness is structural rather than incidental: because the first stage is blind to the rate requirement, the repair pass must be paid for from the same fixed budget, and that expenditure is then unavailable for coverage.
+
+\section{Proposed Method}
+
+The proposed planner decides placement and altitude together, then refines, in four stages.
+
+\subsection{Stage 1: service radii}
+
+Each sensor is assigned its radius $d^{\max}_i$ from Equation~\eqref{eq:dmax} according to its class. These are fixed thereafter.
+
+\subsection{Stage 2: constrained greedy construction}
+
+Clusters are constructed greedily. An uncovered sensor is chosen as anchor, and the feasible altitude for a candidate member set $\mathcal{S}$ is determined by its most demanding member,
+\begin{equation}
+H(\mathcal{S}) = \min_{i \in \mathcal{S}} \left( z_i + \sqrt{ \left( d^{\max}_i \right)^2 - \rho_i^2 } \right),
+\label{eq:hfeas}
+\end{equation}
+subject to $\max( H_{\min}, z_a + h_{\mathrm{safe}} ) \le H(\mathcal{S}) \le H_{\max}$, where $a$ is the anchor. A candidate whose inclusion would make Equation~\eqref{eq:hfeas} infeasible, because $\rho_i > d^{\max}_i$, is not admitted.
+
+Equation~\eqref{eq:hfeas} expresses the central mechanism: the altitude of a hover is dictated by its strictest member. Admitting a high-priority sensor forces the entire cluster to be served from low altitude, which is expensive, so the construction has an incentive to group critical sensors with one another rather than distributing them among clusters that would otherwise fly high.
+
+\subsection{Stage 3: continuous altitude refinement}
+\label{sec:method_refine}
+
+The greedy construction is myopic, since each cluster is fixed as soon as it is formed. Stage 3 improves the solution by local search over cluster membership, with the altitude of each affected cluster recomputed continuously by Equation~\eqref{eq:hfeas} after every candidate modification. Three move types are considered -- relocating a sensor between clusters, merging two clusters, and splitting one in two -- and a move is accepted when it reduces the total energy estimate. Algorithm~\ref{alg:planner} summarises the procedure.
+
+Chapter~\ref{chap:results} establishes that this stage, rather than the joint formulation of Stage 2, accounts for the improvement. That finding was not anticipated and is discussed in Section~\ref{sec:ablation}.
+
+\begin{algorithm}[!ht]
+\caption{Coupled placement with altitude refinement}
+\label{alg:planner}
+\begin{algorithmic}[1]
+\State \textbf{Input:} sensors $\mathcal{N}$, class floors, budget $B_{\mathrm{mission}}$
+\For{each sensor $i$}
+  \State $d^{\max}_i \gets$ Equation~\eqref{eq:dmax} for the class of $i$
+\EndFor
+\State $\mathcal{C} \gets \emptyset$;\quad $U \gets \mathcal{N}$
+\While{$U \neq \emptyset$}  \Comment{Stage 2}
+  \State select anchor $a \in U$
+  \State grow member set $\mathcal{S}$ around $a$, keeping $H(\mathcal{S})$ feasible
+  \State $\mathcal{C} \gets \mathcal{C} \cup \{\mathcal{S}\}$;\quad $U \gets U \setminus \mathcal{S}$
+\EndWhile
+\Repeat  \Comment{Stage 3}
+  \State apply relocate, merge or split move to $\mathcal{C}$
+  \State recompute affected altitudes by Equation~\eqref{eq:hfeas}
+  \State retain the move if total energy decreases
+\Until{no improving move exists}
+\State order clusters by nearest neighbour, improve by 2-opt \Comment{Stage 4}
+\State fly the tour until $B_{\mathrm{mission}}$ is exhausted
+\State \textbf{return} served set and per-class satisfaction
+\end{algorithmic}
+\end{algorithm}
+
+\subsection{Stage 4: routing and budget expenditure}
+
+Clusters are ordered by nearest-neighbour construction with 2-opt improvement, and the tour is flown until the budget is consumed. Sensors in clusters not reached before exhaustion are recorded as unserved.
+
+\section{Ablation Design}
+
+To determine which component is responsible for any improvement, a variant is evaluated in which Stage 3 is omitted and the Stage 2 construction is used directly. This coupled-greedy variant shares the joint formulation and the rate constraints with the full method and differs only in the absence of refinement. It is an ablation of the proposed method, not an independent baseline, and is reported as such throughout.
+
+\begin{figure}[!ht]
+\centering
+\includegraphics[width=0.92\textwidth]{figure03_altitude_comparison.pdf}
+\caption[Altitude profile against mission progress]{Altitude against mission progress for each method. The planar baseline holds a constant height throughout. The decoupled baseline cruises high and descends abruptly only during its repair pass, after coverage has already been committed. The proposed method descends where critical sensors require it and returns to an efficient cruise altitude between such events.}
+\label{fig:altitude}
+\end{figure}
