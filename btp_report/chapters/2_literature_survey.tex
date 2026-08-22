@@ -4,7 +4,26 @@
 \minitoc
 \newpage
 
-This chapter reviews the four bodies of work the project draws on: propulsion energy models, since the altitude argument depends on hovering being expensive; altitude optimisation for aerial platforms; learned solvers for routing; and priority and constrained formulations. Section~\ref{sec:lit_gap} states the gap.
+This chapter first describes the base framework the project extends, then reviews the four bodies of work it draws on: propulsion energy models, since the altitude argument depends on hovering being expensive; altitude optimisation for aerial platforms; learned solvers for routing; and priority and constrained formulations. Section~\ref{sec:lit_gap} states the gap.
+
+\section{The Base Framework}
+\label{sec:lit_base}
+
+The starting point is the AUTO framework of Dong, Jiang and Peng \cite{paperA}, which addresses wireless-power-transfer-assisted collection from a set $\mathcal{N}$ of ground devices by a fleet $\mathcal{M}$ of aircraft. Each device is charged over the downlink, harvests energy under a linear model $E^R_{ij} = \eta_L P^R_{ij} T^E_{ij}$, and then uploads its data $D_i$; the aircraft must satisfy
+\begin{equation}
+T^C_{ij} B \log_2\!\left( 1 + \frac{|g^U_{ij}|^2 E^R_{ij}}{\sigma^2 T^C_{ij}} \right) \ge D_i ,
+\label{eq:basecollect}
+\end{equation}
+so that all data is transferred. Energy is accounted per aircraft as
+\begin{equation}
+E_j = \underbrace{P^F T^F_j}_{E^F_j} + \underbrace{(P^T + P^H) T^T_j}_{E^T_j} + \underbrace{(P^C + P^H) T^C_j}_{E^C_j},
+\label{eq:baseenergy}
+\end{equation}
+and the problem is to minimise $\sum_{j} E_j$ over the number of aircraft, the association, the visiting order and the two time allocations, subject to Equation~\eqref{eq:basecollect} together with storage and battery limits.
+
+The formulation is decomposed into a convex time-allocation subproblem, solved in closed form by the Karush--Kuhn--Tucker conditions with a Lambert-$W$ expression for the optimal collection time, and a trajectory subproblem solved by a graph-attention encoder and decoder trained with an actor--critic method that uses the realised system reward as its baseline.
+
+Three properties of this formulation matter for what follows. First, the flight height is a constant $H_F$, set to $20$~m, so altitude is a parameter rather than a decision. Second, each hover serves exactly one device from directly overhead, so there is no notion of a footprint covering several devices at once. Third, and least obviously, the energy model of Equation~\eqref{eq:baseenergy} charges flight at a constant $P^F = 75$~W and hovering at $P^H = 50$~W, which makes hovering \emph{cheaper} than flying. Section~\ref{sec:lit_energy} explains why that ordering is the wrong one for the present problem, and Section~\ref{sec:tasks_altitude} describes what happened when it was retained.
 
 \section{Energy Models for Rotary-Wing Aircraft}
 \label{sec:lit_energy}

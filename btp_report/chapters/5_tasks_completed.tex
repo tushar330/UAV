@@ -17,7 +17,9 @@ The channel, coverage and energy models were implemented and verified against ha
 
 The first working planner treated altitude as a free decision and minimised total energy. It converged to a policy that flew at the maximum permitted altitude and never varied.
 
-The behaviour was correct rather than defective. The energy model then in use charged propulsion at a constant rate and hovering cheaply, so a weak link imposed no penalty beyond a longer hover, and a longer hover was inexpensive, whereas descending cost climb energy and narrowed the footprint. Flying as high as permitted was genuinely optimal for the model as written, and no amount of tuning would have produced descent.
+The behaviour was correct rather than defective. The energy model then in use was inherited directly from the base framework, which charges flight at a constant $P^F = 75$~W and hovering at $P^H = 50$~W. Under those values hovering is the \emph{cheaper} of the two states, so a weak link imposes no penalty beyond a longer hover and a longer hover costs less per second than flying, whereas descending costs climb energy and narrows the footprint. Flying as high as permitted was genuinely optimal for the model as written, and no amount of tuning would have produced descent.
+
+The ordering is defensible in the original setting, where the aircraft holds one altitude and hover duration is governed by the charging requirement rather than by link geometry. It is not defensible once altitude becomes a decision, because it removes the only mechanism that would penalise a weak link.
 
 The correction was to adopt the rotary-wing curve of Equation~\eqref{eq:pv}, under which hovering is the most expensive state available. A weak link then becomes expensive rather than merely slow, and descending acquires a reason to occur. This change made the remainder of the project possible.
 

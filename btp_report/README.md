@@ -39,18 +39,20 @@ for compiling.
 
 | Where | What |
 |---|---|
-| `references.bib`, entry `paperA` | **Placeholder.** The citation of the 2D AUTO base paper is not recorded anywhere in the project sources and has deliberately not been invented. Fill in the real one. |
 | `FrontPages/title_page.tex` | Supervisor name (`Dr. XX`), and confirm the author name and month. |
 | `FrontPages/Certificate.tex` | Supervisor name and the project date range. |
 | `FrontPages/Acknowledgement.tex` | Supervisor name; adjust the wording to your own. |
 
-If you cite the second base paper (the 3D UAV-ISAC work) in the text, add it to
-`references.bib` and cite it in Chapter 1 or 2.
+The base paper is cited correctly as `paperA` (Dong, Jiang and Peng, *IEEE
+Transactions on Industrial Electronics*, vol. 72, no. 8, pp. 8463-8471, 2025,
+doi 10.1109/TIE.2024.3525117), taken from the PDF itself. If you also cite the
+second base paper (the 3D UAV-ISAC work) in the text, add it to `references.bib`
+and cite it in Chapter 1 or 2.
 
 ## Page count
 
-Target was 35–45 pages. The estimate is **40–46**, from a word count of roughly
-8,800 in the chapters plus 6 figures, 8 tables, 10 equations and 1 algorithm,
+Target was 35–45 pages. The estimate is **42–48**, from a word count of roughly
+9,400 in the chapters plus 6 figures, 8 tables, 12 equations and 1 algorithm,
 over the template text block of 16 cm x 23.5 cm at 12 pt double spacing.
 
 The estimate is uncertain because the source has not been compiled. If the

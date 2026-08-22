@@ -74,9 +74,13 @@ E_{\mathrm{horiz}} = \sum_{\ell} L_{\ell} \cdot \min_{V} \frac{P(V)}{V} ,
 \end{equation}
 vertical motion follows Equation~\eqref{eq:evert}, and hovering is charged at the peak power $P_0 + P_i = 168.5$~W for the duration of each collection. Parameters are listed in Table~\ref{tab:params}.
 
+The bandwidth, noise power, transmit and collection powers, flight speed and safety clearance are taken unchanged from the base framework \cite{paperA} so that the planar baseline reproduces its operating point rather than a re-tuned variant. The propulsion model, the path-loss exponent and the altitude bounds are specific to this work, for the reasons given in Sections~\ref{sec:tasks_altitude} and \ref{sec:tasks_alpha}.
+
+Two deliberate departures from the base framework should be noted. That work optimises the number of aircraft deployed, whereas the present study fixes a single aircraft so that the altitude effect is not confounded with fleet sizing; and it serves each device by its own hover from directly overhead, whereas the coverage relation of Equation~\eqref{eq:cone2} permits one hover to serve several devices, which is what makes altitude a trade-off rather than a free parameter.
+
 \begin{table}[!ht]
 \centering
-\caption{Principal simulation parameters}
+\caption[Principal simulation parameters]{Principal simulation parameters. Communication and platform values follow the base framework \cite{paperA}; propagation, propulsion and altitude values are specific to this work.}
 \label{tab:params}
 \begin{tabular}{llc}
 \toprule
