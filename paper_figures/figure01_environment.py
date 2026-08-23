@@ -215,7 +215,7 @@ def draw_district_labels(ax, city) -> None:
             d.name.replace("_", " "), xy=(x2, y2), xycoords="data",
             fontsize=DISTRICT_LABEL_SIZE, style="italic", ha="center",
             va="center", color=DISTRICT_LABEL_COLOR, bbox=DISTRICT_LABEL_BBOX,
-            zorder=11,
+            zorder=10_000,
         )
 
 
@@ -289,9 +289,28 @@ def draw_pois(ax, city) -> None:
             marker="*", s=200, facecolor="#FFD54F",
             edgecolor="black", linewidths=0.6, depthshade=False,
         )
-        ax.text(
-            poi.x, poi.y, POI_MARKER_Z + POI_LABEL_DZ, poi.name,
-            fontsize=7.5, ha="center", va="bottom", zorder=10, bbox=LABEL_BBOX,
+        # The name is NOT drawn here: see draw_poi_labels.
+
+
+def draw_poi_labels(ax, city) -> None:
+    """POI names as a 2D overlay, for the same reason as the district names.
+
+    mplot3d recomputes an artist's z-order at draw time from its projected
+    depth, so a Text3D behind a tall building loses to it no matter what
+    zorder it was given -- which is why "City Hospital" was half-swallowed by
+    the block in front of it. Projecting the anchor once and annotating in
+    display coordinates puts the name reliably on top.
+
+    Must be called after the view/limits are set.
+    """
+    proj = ax.get_proj()
+    for poi in city.pois:
+        x2, y2, _ = proj3d.proj_transform(
+            poi.x, poi.y, POI_MARKER_Z + POI_LABEL_DZ, proj
+        )
+        ax.annotate(
+            poi.name, xy=(x2, y2), xycoords="data", fontsize=7.5,
+            ha="center", va="bottom", bbox=LABEL_BBOX, zorder=10_001,
         )
 
 
@@ -431,6 +450,7 @@ def make_figure(city):
 
     # District names as a 2D overlay (needs the finalised camera projection).
     draw_district_labels(ax, city)
+    draw_poi_labels(ax, city)
 
     build_legend(ax)
 

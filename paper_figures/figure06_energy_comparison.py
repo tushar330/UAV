@@ -72,7 +72,9 @@ METHOD_STYLE = [
 
 # Labels describe whatever actually produced the numbers on disk (the
 # exporter's results_data/labels.json); unchanged in placeholder mode.
-METHOD_STYLE = apply_labels(METHOD_STYLE)
+# This figure pools every city seed, so 2D-AUTO is labelled with the altitude
+# range it actually flew across them, not the canonical scene's single value.
+METHOD_STYLE = apply_labels(METHOD_STYLE, aggregate=True)
 
 
 # =============================================================================
@@ -239,7 +241,10 @@ def plot_energy_comparison(data):
             alpha=1.0 if emph else 0.9, zorder=3,
         )
         for rect, h in zip(bars, heights):
-            ax.annotate(f"{h:.0f}", xy=(rect.get_x() + rect.get_width() / 2, h),
+            # Comm energy is ~0.03 kJ: rounding it to "0" reads as exactly
+            # zero, so sub-unit values keep two decimals.
+            txt = f"{h:.2f}" if 0.0 < h < 0.5 else f"{h:.0f}"
+            ax.annotate(txt, xy=(rect.get_x() + rect.get_width() / 2, h),
                         xytext=(0, 3), textcoords="offset points",
                         ha="center", va="bottom",
                         fontsize=8, fontweight="bold" if emph else "normal",
@@ -287,7 +292,7 @@ def plot_energy_comparison(data):
     ax.grid(axis="y", color="0.88", lw=0.6, alpha=0.7)
     ax.set_axisbelow(True)
 
-    ax.legend(ncol=3, loc="lower center", bbox_to_anchor=(0.5, 1.005),
+    ax.legend(ncol=4, loc="lower center", bbox_to_anchor=(0.5, 1.005),
               frameon=False, fontsize=8.5, columnspacing=1.6, handlelength=1.4)
 
     fig.subplots_adjust(left=0.09, right=0.975, top=0.86, bottom=0.11)

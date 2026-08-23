@@ -77,7 +77,9 @@ SECONDARY_REFERENCE = "two_stage"
 
 # Labels describe whatever actually produced the numbers on disk (the
 # exporter's results_data/labels.json); unchanged in placeholder mode.
-METHODS = apply_labels(METHODS)
+# This figure pools every city seed, so 2D-AUTO is labelled with the altitude
+# range it actually flew across them, not the canonical scene's single value.
+METHODS = apply_labels(METHODS, aggregate=True)
 
 OURS_ROW_FILL = "#E8F0FE"          # light tint of the method color
 HEADER_FILL = "#F0F0F0"
@@ -283,16 +285,25 @@ def plot_table(data):
     if sec:
         ref_label = dict((k, l) for k, l, _ in METHODS).get(
             SECONDARY_REFERENCE, SECONDARY_REFERENCE)
-        parts = [f"{k} p={sec[k]:.3f}" for k, _, _ in COLUMNS if k in sec]
+        # "p=0.000" claims a p-value of zero; report the bound instead.
+        parts = [f"{k} p<0.001" if sec[k] < 0.0005 else f"{k} p={sec[k]:.3f}"
+                 for k, _, _ in COLUMNS if k in sec]
         bits.append(f"Ours vs {ref_label}, paired: " + ", ".join(parts) + ".")
     if data.get("legacy_ci"):
         bits.append("CI from a legacy export (normal quantile) — re-export to correct.")
     bits.append("Means match Figs. 5-6; ↓ lower is better, ↑ higher is better.")
 
-    fig.text(0.5, 0.045, "\n".join(bits),
-             ha="center", va="top", fontsize=7.0, style="italic", color="0.4")
-
     fig.subplots_adjust(left=0.22, right=0.98, top=0.82, bottom=0.20)
+
+    # Hang the footnote off the table's real bottom edge. A fixed y left a
+    # wide dead band, because the table's height depends on how many method
+    # rows are present after present_methods() drops absent ones.
+    cells = table.get_celld().values()
+    table_bottom_ax = min(c.get_y() for c in cells)
+    pos = ax.get_position()
+    footnote_y = pos.y0 + table_bottom_ax * pos.height - 0.035
+    fig.text(0.5, footnote_y, "\n".join(bits),
+             ha="center", va="top", fontsize=7.0, style="italic", color="0.4")
     return fig
 
 

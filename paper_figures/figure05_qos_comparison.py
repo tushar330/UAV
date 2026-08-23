@@ -82,7 +82,9 @@ METHOD_STYLE = [
 
 # Labels describe whatever actually produced the numbers on disk (the
 # exporter's results_data/labels.json); unchanged in placeholder mode.
-METHOD_STYLE = apply_labels(METHOD_STYLE)
+# This figure pools every city seed, so 2D-AUTO is labelled with the altitude
+# range it actually flew across them, not the canonical scene's single value.
+METHOD_STYLE = apply_labels(METHOD_STYLE, aggregate=True)
 
 
 # =============================================================================
@@ -281,7 +283,7 @@ def plot_qos_comparison(data):
     ax.grid(axis="y", color="0.88", lw=0.6, alpha=0.7)
     ax.set_axisbelow(True)
 
-    ax.legend(ncol=3, loc="lower center", bbox_to_anchor=(0.5, 1.005),
+    ax.legend(ncol=4, loc="lower center", bbox_to_anchor=(0.5, 1.005),
               frameon=False, fontsize=8.5, columnspacing=1.6, handlelength=1.4)
 
     # A QoS percentage means different things in different regimes: under

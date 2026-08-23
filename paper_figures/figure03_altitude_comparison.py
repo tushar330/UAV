@@ -34,7 +34,8 @@ import matplotlib.pyplot as plt
 import matplotlib.lines as mlines
 
 from common_style import setup_style, COLORS
-from common_plot import present_methods, save_figure, apply_labels, priority_color
+from common_plot import (present_methods, save_figure, apply_labels, priority_color,
+                         class_floors_mbps)
 
 
 # =============================================================================
@@ -53,7 +54,9 @@ FIXED_2D_ALT = 100.0       # 2D-AUTO constant altitude
 GNN_MEAN_ALT = 80.0        # Two-Stage stage-1 cruise altitude
 
 # Per-class QoS rate floors (Mbps) - the WHY behind the dives (see DATA_SPEC).
-QOS_RATE = {"high": 38, "medium": 25, "low": 8}
+# Defaults match configs/params.yaml; the export overrides them when present.
+QOS_RATE = {"high": 38.0, "medium": 32.5, "low": 29.0}
+QOS_RATE.update(class_floors_mbps())
 
 # Visual hierarchy: Ours dominant, then its ablation, then the baselines.
 # (key, label, color, linewidth, alpha, z-order)
@@ -214,15 +217,34 @@ def _draw_events(ax, data):
 
 
 def _annotate_one_descent(ax, data):
-    """Label a single representative adaptive descent with the QoS reason."""
-    c = [e["progress"] for e in data["events"] if e["priority"] == "high"][1]
-    xs, ys = data["progress"], data["traces"]["atom3d"]
-    xp = c - 6.0
-    yp = float(np.interp(xp, xs, ys))
-    ax.annotate("Adaptive descent\nto satisfy 38 Mbps QoS",
-                xy=(xp, yp), xytext=(c - 27, 74),
+    """Label a single representative adaptive descent with the QoS reason.
+
+    Anchored on the deepest dive that actually coincides with a high-priority
+    event (searched in a +/-3 % window around each one) rather than at a fixed
+    offset from one: the real trace packs its critical events closely, so a
+    fixed offset lands on an unrelated dip. The label sits in the empty band
+    below the traces, which keeps the leader line short enough that it cannot
+    be misread as a fifth policy curve.
+    """
+    xs = np.asarray(data["progress"])
+    ys = np.asarray(data["traces"]["atom3d"])
+    anchor = None
+    for c in (e["progress"] for e in data["events"] if e["priority"] == "high"):
+        window = (xs >= c - 3.0) & (xs <= c + 3.0)
+        if not window.any():
+            continue
+        i = int(np.argmin(np.where(window, ys, np.inf)))
+        # Keep the label clear of the axis ends and of both legends.
+        if 15.0 < xs[i] < 85.0 and (anchor is None or ys[i] < anchor[1]):
+            anchor = (float(xs[i]), float(ys[i]))
+    if anchor is None:
+        return
+    xp, yp = anchor
+    ax.annotate(f"Adaptive descent\nto satisfy {QOS_RATE['high']:g} Mbps QoS",
+                xy=(xp, yp), xytext=(xp - 10.0, 9.0),
                 fontsize=8, color=COLORS["ours"], ha="left", va="center",
-                arrowprops=dict(arrowstyle="->", color=COLORS["ours"], lw=1.0))
+                arrowprops=dict(arrowstyle="->", color=COLORS["ours"], lw=1.0,
+                                shrinkB=3.0))
 
 
 def _legends(ax):
@@ -242,7 +264,7 @@ def _legends(ax):
         mlines.Line2D([], [], marker="o", linestyle="none",
                       markerfacecolor=priority_color(p), markeredgecolor="black",
                       markeredgewidth=0.4, markersize=6,
-                      label=f"{p.capitalize()}  ({QOS_RATE[p]} Mbps)")
+                      label=f"{p.capitalize()}  ({QOS_RATE[p]:g} Mbps)")
         for p in ("high", "medium", "low")
     ]
     leg2 = ax.legend(handles=dot_handles, loc="upper left",

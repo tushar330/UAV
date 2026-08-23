@@ -28,7 +28,7 @@ anywhere. See the `atom3d-deterministic-paper-scope` decision record.
         ↓
 3D: descend selectively, guided by QoS floors   (Fig. 3, 7, 10)
         ↓
-Critical-node QoS rises from 0.8% to 67.4%      (Fig. 5, 9)
+Critical-node QoS rises from 0.6% to 70.2%      (Fig. 5, 9)
         ↓
 ...at the SAME energy budget                    (Fig. 6)
         ↓
@@ -46,9 +46,12 @@ Critical-node QoS rises from 0.8% to 67.4%      (Fig. 5, 9)
 **Fig. 3 — Altitude vs mission progress.** The visual thesis: ours dives over
 critical nodes; Two-Stage repairs only after the fact; 2D-AUTO is a flat line.
 
-**Fig. 5 — Per-class QoS. THE RESULT.** High 0.8 → 67.4% (p<0.001, 10/10 seeds),
-medium 61.6 → 78.2% (p=0.0016). Low priority is *not* significantly different
-and must not be claimed as a win.
+**Fig. 5 — Per-class QoS. THE RESULT.** High 0.6 → 70.2% (p<0.001, n=20 seeds),
+medium 61.0 → 80.8% (p<0.001). Low priority is only marginal against 2D-AUTO
+(66.7 → 74.2%, p=0.023) and must not be led with — see the guardrail below.
+
+(The n=10 figures this paragraph used to quote — 0.8 → 67.4%, medium 61.6 →
+78.2% — were superseded by the 20-seed export in results_data/.)
 
 **Fig. 6 — Energy.** Read as a control, not a result: every method flies until
 the same budget B is spent. This is what makes Fig. 5 a fair comparison.
@@ -84,7 +87,7 @@ test, plus the explicit ours-vs-Two-Stage comparison.
   altitude head still at initialisation.
 - **Two-Stage must stay in the main results.** It is the strongest baseline; a
   reviewer who discovers a decoupled 3D method reaches 55% while the paper only
-  showed 2D's 0.8% will read it as baseline-hiding.
+  showed 2D's 0.6% will read it as baseline-hiding.
 
 ---
 

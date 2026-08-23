@@ -212,7 +212,13 @@ def plot_trajectories(city, trajs):
     # Camera / axes (Figure-1 conventions).
     ax.set_xlim(0, city.metadata.width)
     ax.set_ylim(0, city.metadata.height)
-    ax.set_zlim(0, Z_LIMIT)
+    # Follow the flown altitudes rather than the fixed 155 m ceiling: no route
+    # clears ~78 m, so half the vertical axis was empty and the altitude
+    # separation this figure exists to show was squashed into its lower half.
+    flown = max(float(np.max(np.asarray(t, float)[:, 2])) for t in trajs.values()
+                if isinstance(t, np.ndarray) or isinstance(t, (list, tuple)))
+    z_top = min(Z_LIMIT, max(flown * 1.3, 60.0))
+    ax.set_zlim(0, z_top)
     ax.set_box_aspect(BOX_ASPECT)
     ax.view_init(elev=VIEW_ELEV, azim=VIEW_AZIM)
     ax.set_xlabel("x (m)", labelpad=4)
@@ -220,7 +226,9 @@ def plot_trajectories(city, trajs):
     ax.set_zlabel("altitude (m)", labelpad=-2)
     ax.set_xticks([0, 250, 500, 750, 1000])
     ax.set_yticks([0, 250, 500, 750, 1000])
-    ax.set_zticks([0, 50, 100, 150])
+    # Ticks must follow the limit; a fixed [0..150] list forced the 3D pane
+    # back open to 150 m and undid the zoom.
+    ax.set_zticks([t for t in (0, 25, 50, 75, 100, 125, 150) if t <= z_top])
     for axis in (ax.xaxis, ax.yaxis, ax.zaxis):
         axis.set_pane_color((1, 1, 1, 0))
 
@@ -239,9 +247,12 @@ def plot_trajectories(city, trajs):
     ax.legend(handles=handles, loc="upper left", bbox_to_anchor=(0.0, 0.97),
               fontsize=7.5, framealpha=0.92, borderpad=0.5, labelspacing=0.35)
 
+    # Name only methods this figure actually draws. The subtitle used to
+    # credit "Blind-3D", a slot removed on 2026-08-17 (see FIGURE_LIST.md) and
+    # absent from both the legend and the data.
     ax.set_title(TITLE + "\n(hover-point sequences: Ours varies altitude, "
-                 "Blind-3D stays high, 2D-AUTO is pinned to one altitude)",
-                 fontsize=10, pad=0)
+                 "Two-Stage stays high, 2D-AUTO is pinned to one altitude)",
+                 fontsize=10, fontweight="bold", pad=0)
     fig.subplots_adjust(left=0.02, right=0.90, bottom=0.05, top=0.97)
     return fig
 
