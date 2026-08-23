@@ -91,6 +91,37 @@ def method_labels() -> dict:
             if v.get("label")}
 
 
+def method_labels_aggregate() -> dict:
+    """Like `method_labels`, but honest about 2D-AUTO on multi-seed figures.
+
+    The exporter pins ``two_d_altitude_m`` to the FIRST seed's altitude - "the
+    canonical scene, used for labels/budget" (export_figure_data.py) - so every
+    figure inherits the label "2D-AUTO (47 m)". That is exactly right for the
+    single-scene figures (3 and 7, which draw that scene), but figures 5, 6, 9,
+    10 and 13 aggregate 20 seeds in which 2D-AUTO actually flew 46-50 m. Those
+    figures call this instead, which widens the label to the observed range.
+
+    Nothing is recomputed or invented: the per-seed altitudes are already on
+    disk in ``two_d_altitude_m_per_seed``. Falls back to `method_labels()`
+    whenever that field is missing or holds a single altitude.
+    """
+    labels = method_labels()
+    if not LABELS_PATH.exists():
+        return labels
+    try:
+        with open(LABELS_PATH, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+    except (OSError, ValueError):
+        return labels
+    per_seed = payload.get("two_d_altitude_m_per_seed") or {}
+    alts = [float(v) for v in per_seed.values()]
+    if len(alts) < 2 or round(min(alts)) == round(max(alts)):
+        return labels
+    labels = dict(labels)
+    labels["2d_auto"] = f"2D-AUTO ({min(alts):.0f}–{max(alts):.0f} m)"
+    return labels
+
+
 def run_regime() -> dict:
     """Experimental regime the results on disk were produced under.
 
@@ -167,14 +198,19 @@ def present_methods(method_style, available) -> list:
     return out
 
 
-def apply_labels(method_style: Sequence[tuple], *, index: int = 1) -> list:
+def apply_labels(method_style: Sequence[tuple], *, index: int = 1,
+                 aggregate: bool = False) -> list:
     """Rewrite the label element of a figure's method-style tuples.
 
     Figures declare `METHOD_STYLE = [(key, label, ...), ...]`; this swaps in the
     real source label for any slot the exporter reported, leaving the key,
     color and any other styling untouched.
+
+    Pass ``aggregate=True`` from a figure that pools several city seeds, so
+    2D-AUTO is labelled with the altitude range it actually flew rather than
+    the canonical scene's - see `method_labels_aggregate`.
     """
-    overrides = method_labels()
+    overrides = method_labels_aggregate() if aggregate else method_labels()
     out = []
     for entry in method_style:
         row = list(entry)
@@ -182,6 +218,36 @@ def apply_labels(method_style: Sequence[tuple], *, index: int = 1) -> list:
             row[index] = overrides[row[0]]
         out.append(tuple(row))
     return out
+
+
+# =============================================================================
+# NOT-A-RESULT STAMPS
+# =============================================================================
+
+def stamp_not_a_result(fig, headline: str, detail: str = "") -> None:
+    """Mark a figure that must never be read as a manuscript result.
+
+    FIGURE_LIST.md promises that every cut figure "renders a
+    `PLACEHOLDER - synthetic data` stamp", and CLAUDE.md forbids placeholder
+    data that is not stamped. Nothing actually drew one, so figures built from
+    invented numbers (Fig. 12's ablation, Fig. 4's coverage) rendered as
+    publication-ready charts indistinguishable from the real results.
+
+    Draws a rotated watermark across the canvas plus a footer line, both in
+    figure coordinates so no axis range or layout has to accommodate them.
+    """
+    fig.text(0.5, 0.5, headline, transform=fig.transFigure,
+             fontsize=34, color="#D32F2F", alpha=0.16, rotation=24,
+             ha="center", va="center", fontweight="bold", zorder=1000)
+    footer = headline if not detail else f"{headline} — {detail}"
+    fig.text(0.5, 0.005, footer, transform=fig.transFigure, fontsize=7.5,
+             color="#D32F2F", ha="center", va="bottom", fontweight="bold",
+             zorder=1000)
+
+
+def stamp_placeholder(fig, detail: str = "") -> None:
+    """Stamp for figures whose numbers are synthetic (the CLAUDE.md wording)."""
+    stamp_not_a_result(fig, "PLACEHOLDER — synthetic data", detail)
 
 
 # =============================================================================

@@ -27,7 +27,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from common_style import setup_style, COLORS
-from common_plot import save_figure, priority_color
+from common_plot import (save_figure, priority_color,
+                         stamp_placeholder, stamp_not_a_result)
 
 
 # =============================================================================
@@ -45,7 +46,7 @@ CONVERGENCE_EPOCH = 130       # same guide line as Figure 4
 DUAL_STYLE = [
     ("lambda_high", r"$\lambda_{\mathrm{high}}$  (QoS $\geq$ 38 Mbps)",
      priority_color("high"), "-"),
-    ("lambda_medium", r"$\lambda_{\mathrm{medium}}$  (QoS $\geq$ 25 Mbps)",
+    ("lambda_medium", r"$\lambda_{\mathrm{medium}}$  (QoS $\geq$ 32.5 Mbps)",
      priority_color("medium"), "--"),
 ]
 
@@ -140,6 +141,12 @@ def main():
     setup_style()
     data = load_dual_results()
     fig = plot_dual_convergence(data)
+    # Cut figures must announce themselves: FIGURE_LIST.md excludes this one
+    # from the manuscript, and nothing on the canvas said so.
+    if data.get("placeholder", True):
+        stamp_placeholder(fig, "cut from the manuscript - see FIGURE_LIST.md")
+    else:
+        stamp_not_a_result(fig, "NOT A MANUSCRIPT RESULT", "cut: needs a trained policy; the CMDP run is invalid")
     save_figure(fig, FIG_NAME)
     plt.close(fig)
 

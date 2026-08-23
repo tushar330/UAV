@@ -44,7 +44,8 @@ import matplotlib.pyplot as plt
 import matplotlib.lines as mlines
 
 from common_style import setup_style, COLORS
-from common_plot import present_methods, save_figure, apply_labels
+from common_plot import (present_methods, save_figure, apply_labels,
+                         stamp_placeholder, stamp_not_a_result)
 
 
 # =============================================================================
@@ -203,6 +204,12 @@ def main():
     setup_style()
     data = load_pareto_results()
     fig = plot_pareto(data)
+    # Cut figures must announce themselves: FIGURE_LIST.md excludes this one
+    # from the manuscript, and nothing on the canvas said so.
+    if data.get("placeholder", True):
+        stamp_placeholder(fig, "cut from the manuscript - see FIGURE_LIST.md")
+    else:
+        stamp_not_a_result(fig, "NOT A MANUSCRIPT RESULT", "cut: needs a trained policy; the CMDP run is invalid")
     save_figure(fig, FIG_NAME)
     plt.close(fig)
 
