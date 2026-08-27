@@ -1057,15 +1057,35 @@ For each: what is plotted, what to say, and what you will be asked.
 
 *Prerequisite: a **CDF (cumulative distribution function)** plots, for each value on the x-axis, the fraction of samples less than or equal to it. It rises from 0 to 1 left to right. A curve **further right** = better, because more mass sits at higher rates.*
 
-**What is plotted.** x: **achieved rate (Mbps)**, 0 → 60. y: cumulative fraction, 0 → 1. One curve per method. A **vertical dashed line at 38 Mbps** marks the critical floor. The legend notes each method's percentage and the label *"left plateau at 0 = unserved (rate 0)"*.
+**What is plotted.** x: **achieved rate (Mbps) on a *logarithmic* axis**, running ~8 → ~59 Mbps (ticks at 10, 2×10, 3×10, 4×10). y: cumulative fraction, 0 → 1. One curve per method. A **red dashed vertical line at 38 Mbps** marks the critical floor, labelled *"QoS floor 38 Mbps"*. A dot on each curve at the floor carries a bold *"NN% below"* annotation — **99% / 45% / 45% / 30%** for 2D-AUTO / Two-Stage / Coupled-Greedy / Strong-Coupled. Two italic notes: *"left plateau = unserved nodes (rate ≈ 0)"* and *"Ours shifts the whole distribution right →"*.
+
+**⭐ Why the axis is logarithmic, and why no curve starts at 0.** Unserved nodes have rate ≈ 0, and **zero cannot be placed on a log axis** — that mass falls off the left edge. So each curve *enters the frame already elevated*, and the height at which it enters is that method's **unserved fraction**: ≈37% (2D-AUTO), ≈45% (Two-Stage and Coupled-Greedy, which overlap exactly), ≈30% (ours — the lowest, which is the point). That flat entry segment is the "left plateau" the annotation names.
+
+**⭐ The single most important shape on this plot — three step functions and one ramp.** Look at the curves, not the numbers:
+
+| Curve | Shape | Why |
+|---|---|---|
+| **2D-AUTO** (grey dashed) | The **only gradual ramp** — climbs from ~37% at about 30 Mbps up to 99% at the floor | **62% of its nodes land *between* 8 and 38 Mbps**: real rates that simply never reach the requirement. Pinned at 47 m, it has no mechanism to fix a shortfall. |
+| **Two-Stage, Coupled-Greedy, Strong-Coupled** | **Near-vertical steps at the floor** — flat, then jump | **0.0%** of their nodes sit between 8 and 38 Mbps. A node is served **at or above its floor, or not at all.** |
+
+That contrast *is* the hard-constraint architecture made visible. Say it exactly like this:
+
+> *"Three of these curves are step functions and one is a ramp. The ramp is the fixed-altitude baseline: sixty-two percent of its critical nodes achieve a real but insufficient rate, topping out at 37.7 Mbps — just short, with no way to recover, because altitude is not a decision it can make. The three methods that *can* choose altitude have no mass at all between zero and the floor: they either meet the requirement or they don't serve the node. That gap is not a plotting artefact, it is the hard constraint."*
+
+**Beyond the floor — margin.** Our curve does not jump straight to 1.0 at 38: it rises from 30% at the floor to about 57% near 42 Mbps, then to ~97%, tailing out at **51.7 Mbps**. So we clear the floor **with headroom**, not by a whisker — because Eq. 3.7 sets the hover at the altitude the *strictest* cluster member permits, leaving every other member comfortably inside its own sphere.
 
 **What to say:**
 > "This shows the *whole distribution* of achieved rate on the critical class, not just the pass/fail percentage.
 > **The left plateau in each curve is unserved nodes — budget exhausted, not a constraint violation.** That distinction matters: because our rate floors are **hard constraints**, we never serve a sensor *below* its floor. A sensor is either served **at or above 38 Mbps**, or **not served at all**. So the curve is essentially a step at zero (the unserved fraction) and then mass out past the floor.
 > **The proposed method shifts the distribution well past the 38 Mbps floor** — we don't merely scrape over the line, we clear it with margin, because Eq. 3.7 places the hover at the altitude the *strictest* member permits, and every other member is then comfortably inside its own sphere."
 
-**Q: ⭐ Why is there no mass between 0 and 38 Mbps?**
-> Because the floors are **hard**. A sensor served below its floor is not counted as served, and the planner never admits an infeasible member to a cluster. Compare this with a **soft-penalty** formulation, which would produce a smear of sensors at 30–37 Mbps — technically "collected", actually failed. The absence of that smear is a visible consequence of our design choice.
+**Q: ⭐ Why is there no mass between 0 and 38 Mbps on your curve?**
+
+Be precise here — **the claim is true of three curves, not all four.** Do not overstate it, because the grey curve visibly contradicts a blanket version and an examiner can see that.
+
+> *"For our method and both 3D baselines, nothing lands between zero and the floor, because the floors are **hard**: a sensor served below its floor is not counted as served, and the planner never admits an infeasible member to a cluster. The fixed-altitude baseline is the exception, and instructively so — **62% of its critical nodes sit between 8 and 38 Mbps**, a smear of rates that are real but insufficient. That smear is exactly what a **soft-penalty** formulation would produce for everyone: sensors technically 'collected' at 30–37 Mbps and actually failed. You can see the difference between the two designs directly — one ramp, three steps."*
+
+**Why this is the better answer:** the contrast is *empirically visible in the figure* rather than a hypothetical you assert. And it lands the architectural point — the smear is what happens when altitude is not a decision variable.
 
 **Q: Why show a CDF at all if the metric is just a percentage?**
 > To demonstrate **margin**, not just pass rate. Two planners could both report 70% while one sits at 38.1 Mbps (fragile — any modelling error flips it to failure) and the other at 48 Mbps (robust). The CDF distinguishes them; a bar chart cannot.
@@ -1074,7 +1094,22 @@ For each: what is plotted, what to say, and what you will be asked.
 
 ## Figure 4.3 — Energy expenditure by component (p. 27)
 
-**What is plotted.** Stacked/grouped bars of **energy (kJ)** per method, decomposed into **Flight**, **Hover** and **Communication** components. Annotation notes the equal budget of ~82.65 kJ and that all methods spend within about 3 kJ of each other.
+**What is plotted.** **Grouped** (not stacked) bars of **energy (kJ)**, four method bars within each of four groups: **Flight**, **Hover**, **Communication**, **Total**. Printed values:
+
+| Group | 2D-AUTO | Two-Stage | Coupled-Greedy | **Ours** |
+|---|---|---|---|---|
+| Flight | 71 | 71 | 70 | **69** |
+| Hover | 10 | 9 | 10 | **10** |
+| Communication | 0.03 | 0.03 | 0.03 | **0.03** |
+| **Total** | **81** | **79** | **80** | **78** |
+
+Two printed annotations, both worth quoting: *"Equal budget B = 83 kJ: all methods spend within 4% of each other."* and — the money line — *"At that energy Strong-Coupled (deterministic) meets 70% of critical-node QoS vs 1% for 2D-AUTO (Fig. 5)."* A bracket over the Total group reads *"equal budget: within 4% of 2D"*.
+
+**⭐ Note that every method spends *less* than the 83 kJ budget** (78–81). Nobody exhausts it exactly, because a hover cannot be flown in part — each stops at the last hover it could afford in full.
+
+**⚠️ The trap on this figure: flight dominates, not hover.** Flight is ~69–71 kJ of a ~78–81 kJ total (**~87%**); hover is only ~10 kJ (**~12%**); communication is negligible at 0.03 kJ (**~0.04%**). An examiner who has heard you say *"hovering is the most expensive state at 168.5 W"* may point at this and claim you contradicted yourself. You have not — answer:
+
+> *"Those are different quantities. 168.5 W is a **power** — energy per second — and hovering is indeed the highest-power state. This chart shows **energy**, which is power × **time**, and the aircraft spends far more seconds cruising between hovers than hovering at them. So flight dominates the total while hover remains the most expensive thing to do per second. That per-second cost is what makes altitude a real decision: a weak link stretches the time a hover must be held, and every one of those extra seconds is billed at the most expensive rate on the platform."*
 
 **What to say — and the caption tells you exactly how to frame it:**
 > "**All methods spend approximately the common budget, so this figure should be read for the *distribution between components* rather than for a winner.** There is deliberately no winner here — that is the point of the budgeted protocol. What it shows is *how* each method spends: how much goes into horizontal flight, how much into hovering — remembering that hovering is the most expensive state at 168.5 W — and how much into the actual communication."
@@ -1115,7 +1150,18 @@ For each: what is plotted, what to say, and what you will be asked.
 
 ## Figure 4.5 — Representative three-dimensional trajectories (p. 32)
 
-**What is plotted.** 3D flight paths over the deployment: x and y to 1000 m, altitude to ~100 m, with the **Depot**, marked **critical sensor** locations, and one trajectory per method (planar, decoupled, proposed). Annotations mark "3D trajectories over the network" and "lowest dive 10 m". *The coupled-greedy ablation is omitted for legibility, since its route closely resembles the full method's while its altitudes are less refined.*
+**What is plotted.** 3D flight paths over the deployment: x and y to 1000 m, altitude axis to 100 m, with the **Depot** marked, sensors coloured by class (high / medium / low), and one trajectory per method. *The coupled-greedy ablation is omitted for legibility, since its route closely resembles the full method's while its altitudes are less refined.*
+
+**Title and legend, verbatim.** Title: *"3D Trajectories in the Network"*, subtitle *"(hover-point sequences: Ours varies altitude, Two-Stage stays high, 2D-AUTO is pinned to one altitude)"*. Legend: **2D-AUTO (47 m)** grey dotted · **Two-Stage (decoupled)** orange dashed · **Strong-Coupled (deterministic)** solid blue — the last one is ours.
+
+**⭐ The two annotations — know both numbers, they are the whole argument in two labels:**
+
+| Annotation | Number | What it means |
+|---|---|---|
+| "2D-AUTO holds 47 m" | **47 m** | The planar baseline's single altitude — tallest structure (37.4 m) + $h_{\text{safe}}$. Its whole trajectory is a flat sheet at this height. |
+| "lowest dive 20 m" | **20 m** | The deepest descent our method makes on this layout. |
+
+**Do not confuse 20 m with 10 m.** 20 m is $H_{\min}$, the **global altitude floor** — so this annotation says the refinement drove the aircraft *all the way down to its hard floor*. 10 m is $h_{\text{safe}}$, a **different quantity**: the clearance kept above the served anchor. If asked "why not lower than 20 m?", the answer is *"$H_{\min}$ forbids it"*, not anything about $h_{\text{safe}}$.
 
 **What to say:**
 > "This is the geometric version of Fig. 4.4.
