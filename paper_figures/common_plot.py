@@ -66,7 +66,8 @@ def priority_color(priority: str) -> str:
 # METHOD LABELS (provenance-aware)
 # =============================================================================
 #
-# A figure's method slot keys ("2d_auto", "3d_gnn", "atom3d") are stable, but
+# A figure's method slot keys ("2d_auto", "two_stage", "coupled_greedy",
+# "atom3d") are stable, but
 # the *label* must describe whatever actually produced the numbers on disk. The
 # exporter (`atom_3d.experiments.export_figure_data`) writes a sidecar
 # `results_data/labels.json` naming the real source of each slot, so a figure
@@ -90,14 +91,126 @@ def method_labels() -> dict:
             if v.get("label")}
 
 
-def apply_labels(method_style: Sequence[tuple], *, index: int = 1) -> list:
+def method_labels_aggregate() -> dict:
+    """Like `method_labels`, but honest about 2D-AUTO on multi-seed figures.
+
+    The exporter pins ``two_d_altitude_m`` to the FIRST seed's altitude - "the
+    canonical scene, used for labels/budget" (export_figure_data.py) - so every
+    figure inherits the label "2D-AUTO (47 m)". That is exactly right for the
+    single-scene figures (3 and 7, which draw that scene), but figures 5, 6, 9,
+    10 and 13 aggregate 20 seeds in which 2D-AUTO actually flew 46-50 m. Those
+    figures call this instead, which widens the label to the observed range.
+
+    Nothing is recomputed or invented: the per-seed altitudes are already on
+    disk in ``two_d_altitude_m_per_seed``. Falls back to `method_labels()`
+    whenever that field is missing or holds a single altitude.
+    """
+    labels = method_labels()
+    if not LABELS_PATH.exists():
+        return labels
+    try:
+        with open(LABELS_PATH, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+    except (OSError, ValueError):
+        return labels
+    per_seed = payload.get("two_d_altitude_m_per_seed") or {}
+    alts = [float(v) for v in per_seed.values()]
+    if len(alts) < 2 or round(min(alts)) == round(max(alts)):
+        return labels
+    labels = dict(labels)
+    labels["2d_auto"] = f"2D-AUTO ({min(alts):.0f}–{max(alts):.0f} m)"
+    return labels
+
+
+def run_regime() -> dict:
+    """Experimental regime the results on disk were produced under.
+
+    Returns {} in placeholder mode. Keys of interest:
+      energy_budget_kj : float or None - the mission budget B, if any.
+      regime           : one-sentence description of the comparison setup.
+
+    A QoS number means something different depending on this: under serve-all
+    with hard QoS constraints every feasible plan scores 100% by construction,
+    whereas under a budget it reports how far the mission got. Figures state
+    which regime they are showing so the two are never read as the same claim.
+    """
+    if not LABELS_PATH.exists():
+        return {}
+    try:
+        with open(LABELS_PATH, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+    except (OSError, ValueError):
+        return {}
+    return {k: payload[k] for k in ("energy_budget_kj", "regime") if k in payload}
+
+
+def class_floors_mbps() -> dict:
+    """{class: floor in Mbps} the results were actually scored against.
+
+    Empty when absent (placeholder mode, or an export predating the field), in
+    which case a figure keeps its own defaults. Reading the floors from the
+    export stops a figure from labelling a bar with a floor the data was not
+    measured against - the shipped 38/25/8 were recalibrated once already.
+    """
+    if not LABELS_PATH.exists():
+        return {}
+    try:
+        with open(LABELS_PATH, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+    except (OSError, ValueError):
+        return {}
+    floors = payload.get("class_floors_bps") or {}
+    return {k: float(v) / 1e6 for k, v in floors.items()}
+
+
+def budget_footnote() -> str:
+    """One-line statement of the budget regime, or '' if there is none."""
+    info = run_regime()
+    budget = info.get("energy_budget_kj")
+    if not budget:
+        return ""
+    return (f"Equal-budget comparison: every method flies its own route until "
+            f"B = {float(budget):.0f} kJ is spent, so energy is comparable by "
+            f"construction and QoS is what differs.")
+
+
+def present_methods(method_style, available) -> list:
+    """Keep only the method slots the loaded results actually contain.
+
+    The set of methods is not fixed forever: Blind-3D was dropped and Two-Stage
+    and Coupled-Greedy were added. Without this filter a figure hard-crashes
+    with a KeyError whenever its declared slots and the data on disk disagree -
+    which is exactly what happens in the window between a code change and the
+    next export, and after any run that skips a method.
+
+    Skipping is the right behaviour rather than substituting a default: a figure
+    must never invent a curve for a method that did not run.
+
+    ``method_style`` may be a list of (key, ...) tuples or a sequence of plain
+    keys; ``available`` is any container supporting ``in`` (dict, set, npz).
+    """
+    keys = set(available)
+    out = []
+    for entry in method_style:
+        key = entry[0] if isinstance(entry, (tuple, list)) else entry
+        if key in keys:
+            out.append(entry)
+    return out
+
+
+def apply_labels(method_style: Sequence[tuple], *, index: int = 1,
+                 aggregate: bool = False) -> list:
     """Rewrite the label element of a figure's method-style tuples.
 
     Figures declare `METHOD_STYLE = [(key, label, ...), ...]`; this swaps in the
     real source label for any slot the exporter reported, leaving the key,
     color and any other styling untouched.
+
+    Pass ``aggregate=True`` from a figure that pools several city seeds, so
+    2D-AUTO is labelled with the altitude range it actually flew rather than
+    the canonical scene's - see `method_labels_aggregate`.
     """
-    overrides = method_labels()
+    overrides = method_labels_aggregate() if aggregate else method_labels()
     out = []
     for entry in method_style:
         row = list(entry)
@@ -105,6 +218,36 @@ def apply_labels(method_style: Sequence[tuple], *, index: int = 1) -> list:
             row[index] = overrides[row[0]]
         out.append(tuple(row))
     return out
+
+
+# =============================================================================
+# NOT-A-RESULT STAMPS
+# =============================================================================
+
+def stamp_not_a_result(fig, headline: str, detail: str = "") -> None:
+    """Mark a figure that must never be read as a manuscript result.
+
+    FIGURE_LIST.md promises that every cut figure "renders a
+    `PLACEHOLDER - synthetic data` stamp", and CLAUDE.md forbids placeholder
+    data that is not stamped. Nothing actually drew one, so figures built from
+    invented numbers (Fig. 12's ablation, Fig. 4's coverage) rendered as
+    publication-ready charts indistinguishable from the real results.
+
+    Draws a rotated watermark across the canvas plus a footer line, both in
+    figure coordinates so no axis range or layout has to accommodate them.
+    """
+    fig.text(0.5, 0.5, headline, transform=fig.transFigure,
+             fontsize=34, color="#D32F2F", alpha=0.16, rotation=24,
+             ha="center", va="center", fontweight="bold", zorder=1000)
+    footer = headline if not detail else f"{headline} — {detail}"
+    fig.text(0.5, 0.005, footer, transform=fig.transFigure, fontsize=7.5,
+             color="#D32F2F", ha="center", va="bottom", fontweight="bold",
+             zorder=1000)
+
+
+def stamp_placeholder(fig, detail: str = "") -> None:
+    """Stamp for figures whose numbers are synthetic (the CLAUDE.md wording)."""
+    stamp_not_a_result(fig, "PLACEHOLDER — synthetic data", detail)
 
 
 # =============================================================================

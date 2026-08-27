@@ -1,0 +1,112 @@
+\chapter{Literature Survey}
+\label{chap:litsurvey}
+\noindent \rule{6.6in}{0.01in}
+\minitoc
+\newpage
+
+This chapter first describes the base framework the project extends, then reviews the four bodies of work it draws on: propulsion energy models, since the altitude argument depends on hovering being expensive; altitude optimisation for aerial platforms; learned solvers for routing; and priority and constrained formulations. Section~\ref{sec:lit_gap} states the gap.
+
+\section{The Base Framework}
+\label{sec:lit_base}
+
+The starting point is the AUTO framework of Dong, Jiang and Peng \cite{paperA}, which addresses wireless-power-transfer-assisted collection from a set $\mathcal{N}$ of ground devices by a fleet $\mathcal{M}$ of aircraft. Each device is charged over the downlink, harvests energy under a linear model $E^R_{ij} = \eta_L P^R_{ij} T^E_{ij}$, and then uploads its data $D_i$; the aircraft must satisfy
+\begin{equation}
+T^C_{ij} B \log_2\!\left( 1 + \frac{|g^U_{ij}|^2 E^R_{ij}}{\sigma^2 T^C_{ij}} \right) \ge D_i ,
+\label{eq:basecollect}
+\end{equation}
+so that all data is transferred. Energy is accounted per aircraft as
+\begin{equation}
+E_j = \underbrace{P^F T^F_j}_{E^F_j} + \underbrace{(P^T + P^H) T^T_j}_{E^T_j} + \underbrace{(P^C + P^H) T^C_j}_{E^C_j},
+\label{eq:baseenergy}
+\end{equation}
+and the problem is to minimise $\sum_{j} E_j$ over the number of aircraft, the association, the visiting order and the two time allocations, subject to Equation~\eqref{eq:basecollect} together with storage and battery limits.
+
+The formulation is decomposed into a convex time-allocation subproblem, solved in closed form by the Karush--Kuhn--Tucker conditions with a Lambert-$W$ expression for the optimal collection time, and a trajectory subproblem solved by a graph-attention encoder and decoder trained with an actor--critic method that uses the realised system reward as its baseline.
+
+Three properties of this formulation matter for what follows. First, the flight height is a constant $H_F$, set to $20$~m, so altitude is a parameter rather than a decision. Second, each hover serves exactly one device from directly overhead, so there is no notion of a footprint covering several devices at once. Third, and least obviously, the energy model of Equation~\eqref{eq:baseenergy} charges flight at a constant $P^F = 75$~W and hovering at $P^H = 50$~W, which makes hovering \emph{cheaper} than flying. Section~\ref{sec:lit_energy} explains why that ordering is the wrong one for the present problem, and Section~\ref{sec:tasks_altitude} describes what happened when it was retained.
+
+\section{Energy Models for Rotary-Wing Aircraft}
+\label{sec:lit_energy}
+
+Early trajectory work modelled propulsion cost crudely, often as constant power multiplied by flight time. Zeng and Zhang \cite{zeng2017energy} showed that for fixed-wing platforms the speed--power relationship is non-monotonic, and that trajectories optimised under a constant-power assumption can be substantially suboptimal once a realistic curve is substituted.
+
+The rotary-wing case, relevant for a vehicle that must stop and hover to collect data, was treated by Zeng, Xu and Zhang \cite{zeng2019rotary}, who express propulsion power as a sum of blade profile, induced and parasite terms,
+\begin{equation}
+P(V) = P_0\left(1 + \frac{3V^2}{U_{\mathrm{tip}}^2}\right) + P_i\left(\sqrt{1 + \frac{V^4}{4v_0^4}} - \frac{V^2}{2v_0^2}\right)^{\!1/2} + \tfrac{1}{2} d_0 \rho s A V^3 ,
+\label{eq:pv}
+\end{equation}
+where $V$ is airspeed and the remaining symbols are airframe and atmospheric constants. The property that matters here is that $P(0) = P_0 + P_i$, the hovering power, is the \emph{maximum} of the curve rather than the minimum: a rotary-wing aircraft consumes more power standing still than cruising at its most efficient speed.
+
+This is not a detail. If hovering were cheap, an aircraft could remain at a convenient height, tolerate a weak link and wait for the data. Because hovering is the most expensive state available, waiting is costly, and a weak link becomes expensive in energy rather than merely slow. Section~\ref{sec:tasks_altitude} describes how an earlier version of this project, built on a constant-power assumption, produced a planner that always flew as high as permitted.
+
+Vertical motion adds a term absent from planar formulations. Climbing performs work against gravity while descending recovers little of it in a rotorcraft, an asymmetry commonly modelled as
+\begin{equation}
+E_{\mathrm{vert}} = \frac{mg}{\eta}\,\Delta h_{\mathrm{climb}} + c_d\,\Delta h_{\mathrm{descent}} ,
+\label{eq:evert}
+\end{equation}
+with $c_d \ll mg/\eta$. This is what prevents a planner from descending casually: every descent is eventually paid for by a climb.
+
+\section{Altitude Optimisation and Aerial Coverage}
+\label{sec:lit_altitude}
+
+The most directly relevant treatment of altitude appears in the aerial base station literature. Al-Hourani, Kandeepan and Lardner \cite{alhourani2014optimal} derived an optimal height for a low-altitude platform serving a ground area, and identified the trade-off that recurs throughout this work: greater height enlarges the geometric footprint but lengthens every link, and the opposing effects produce an interior optimum. Mozaffari et al. \cite{mozaffari2017mobile} extended the reasoning to energy-efficient collection, and their survey \cite{mozaffari2019tutorial} consolidates the placement literature.
+
+The particular algebraic form adopted in this report is taken from Liu et al. \cite{paperB}, who study a three-dimensional trajectory for an aerial platform performing integrated sensing and communication. Their location constraint requires that a node lie within the angular reach of the platform,
+\begin{equation}
+\omega_k(q) \left[ (x_u(q) - x_k)^2 + (y_u(q) - y_k)^2 \right] \le \left( H_u(q)\tan\theta \right)^{2} ,
+\label{eq:cone}
+\end{equation}
+which after accounting for ground elevation is the relation used in Chapter~\ref{chap:method}.
+
+The interpretation, however, differs from theirs in a way that should be stated plainly, since it bears on what this report may claim as its own. In \cite{paperB}, $\theta$ is the maximum \emph{radar detection angle} of the platform, and the constraint is gated by the binary scheduling variable $\omega_k(q)$ under $\sum_k \omega_k(q) + b(q) = 1$: at any instant the platform is either sensing exactly one node or uploading data. Equation~\eqref{eq:cone} is therefore a pointing constraint on a single scheduled target, and the terms \emph{footprint}, \emph{beamwidth} and \emph{coverage cone} do not appear in that work at all.
+
+The present report reinterprets the same geometry as a communication footprint within which a hover may serve \emph{several} sensors simultaneously. That reinterpretation is not cosmetic: it is what creates the trade-off the contribution rests upon. If a hover serves one sensor at a time, as in both \cite{paperA} and \cite{paperB}, then climbing brings no benefit and the optimal altitude is simply the lowest one permitted. Only when a single hover can cover a group does height buy anything, and only then does the opposition between coverage and link quality described in Section~\ref{sec:tension} arise.
+
+A distinction should be drawn between that literature and the present problem. Base station placement concerns a static deployment of aircraft maximising coverage or sum rate: the altitude is chosen once and the platform remains there. A collection mission visits many hover positions in sequence, and there is no reason for the altitude to be the same at each. The published treatments therefore establish that an optimum height exists for a \emph{given} served set, but do not address decomposing a deployment into served sets and selecting a height for each. That joint problem is what Chapter~\ref{chap:method} formulates.
+
+\section{Learned Solvers for Routing Problems}
+\label{sec:lit_learned}
+
+Selecting hover positions and ordering them is closely related to the travelling salesman and vehicle routing problems, both NP-hard. Classical practice relies on construction heuristics followed by local improvement, of which the 2-opt exchange of Croes \cite{croes1958method} remains the standard example.
+
+Learned alternatives followed the introduction of pointer networks \cite{vinyals2015pointer}, which allowed a neural model to emit a permutation over a variable-length input. Bello et al. \cite{bello2016neural} trained such a model with policy gradients and a learned baseline, removing the need for supervised solutions. Kool, van Hoof and Welling \cite{kool2019attention} replaced the recurrent encoder with a transformer \cite{vaswani2017attention} and introduced a rollout baseline, obtaining results competitive with strong heuristics; Nazari et al. \cite{nazari2018reinforcement} developed a parallel line for vehicle routing with stochastic demand.
+
+The base formulation adopts that architecture, trained with REINFORCE \cite{williams1992simple}. The observation relevant here is that all of these models emit a permutation over discrete items. Extending such a decoder to also emit a continuous quantity such as altitude is not merely a matter of adding an output: the continuous head must be conditioned on the discrete selection, because the appropriate altitude depends on which sensor has just been chosen. Section~\ref{sec:tasks_rl} reports what happens when that conditioning is absent.
+
+\section{Quality of Service and Constrained Formulations}
+\label{sec:lit_qos}
+
+Differentiated service is standard in networking but appears less often in trajectory optimisation. Where priority is incorporated it is usually as a weighting in the objective, which permits the optimiser to trade one important device against a sufficient number of unimportant ones -- precisely the behaviour a criticality requirement is meant to prevent.
+
+The alternative is a constrained formulation. Altman \cite{altman1999constrained} gives the standard treatment of constrained Markov decision processes, in which a policy maximises reward subject to bounds on auxiliary costs, typically solved by Lagrangian methods with multipliers updated by dual ascent. Achiam et al. \cite{achiam2017constrained} developed a trust-region method with approximate guarantees during training. This project initially adopted such a formulation, with one dual variable per criticality class; Section~\ref{sec:tasks_rl} records the outcome.
+
+A related notion is freshness rather than rate: Kaul, Yates and Gruteser \cite{kaul2012real} introduced Age of Information as a measure of staleness, which is complementary to the rate requirement used here and is identified in Chapter~\ref{chap:conclusion} as a natural extension.
+
+Within aerial collection specifically, Zhan, Zeng and Zhang \cite{zhan2018energy} studied energy-efficient collection from a sensor network, and Yang et al. \cite{yang2018energy} examined the trade-off between aircraft and device energy. Xu, Zeng and Zhang \cite{xu2018uav} treated the wireless power transfer variant, and Wu, Zeng and Zhang \cite{wu2018joint} addressed joint trajectory and communication design with several cooperating aircraft. Section~\ref{sec:tasks_wpt} explains why power transfer is set aside here.
+
+\section{Identified Gap}
+\label{sec:lit_gap}
+
+Table~\ref{tab:gap} summarises the position: each body of work supplies one necessary component, and no existing treatment combines them.
+
+\begin{table}[!ht]
+\centering
+\caption{Relationship of the present work to existing literature}
+\label{tab:gap}
+\begin{tabular}{p{4.4cm}p{3.0cm}p{2.2cm}p{2.4cm}}
+\toprule
+\textbf{Line of work} & \textbf{Altitude} & \textbf{Priority} & \textbf{Route} \\
+\midrule
+Planar collection \cite{zhan2018energy,yang2018energy} & Fixed & No & Optimised \\
+Aerial base stations \cite{alhourani2014optimal,mozaffari2017mobile} & Optimised, static & No & Not applicable \\
+Learned routing \cite{kool2019attention,nazari2018reinforcement} & Not modelled & No & Learned \\
+Constrained policies \cite{altman1999constrained,achiam2017constrained} & Not modelled & Via constraints & Not applicable \\
+\midrule
+\textbf{This work} & \textbf{Per hover} & \textbf{Per class floor} & \textbf{Optimised} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The gap may be stated compactly. The altitude literature establishes that an optimum height exists for a fixed served set but assumes the set is given; the routing literature decomposes a deployment into served sets but assumes altitude is fixed. Whichever is solved first constrains the other, and the interaction is not benign: choosing hover positions without regard to the rate requirement produces clusters for which no feasible altitude exists, while choosing altitudes without regard to clustering produces coverage that is either wasteful or inadequate.
+
+This work therefore treats placement and altitude as a single decision under per-class rate constraints. It should be stated at the outset, since Chapter~\ref{chap:results} demonstrates it experimentally, that joint treatment alone turns out not to be sufficient; the refinement described in Section~\ref{sec:method_refine} is what delivers the measured improvement.

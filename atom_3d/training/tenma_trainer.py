@@ -214,7 +214,7 @@ class TENMATrainer:
             dim_3d=self.is_3d, H_min=self.H_min, H_max=self.H_max,
             fixed_altitude=self.fixed_alt, tan_theta=self.tan_theta,
             clip_logits=params["decoder"]["clip_logits"],
-            freeze_altitude=train_cfg.freeze_altitude,
+            freeze_altitude=train_cfg.freeze_altitude, h_safe=self.h_safe,
         ).to(self.device)
         self.critic = CriticNetwork(
             embed_dim=train_cfg.embed_dim, hidden_dim=max(train_cfg.embed_dim // 2, 64),
@@ -255,8 +255,23 @@ class TENMATrainer:
 
     # ------------------------------------------------------------------
     def _normalize(self, node_features: torch.Tensor) -> torch.Tensor:
-        """Scale raw [x,y,(z),D] features into an O(1) range for the encoder."""
+        """Scale raw [x,y,(z),D] features into an O(1) range for the encoder.
+
+        Positions are centred on each instance's own centroid before scaling, so
+        the encoder sees the same coordinate range whatever absolute frame the
+        scenario is expressed in. Training draws nodes in [-500, +500] about the
+        origin, while the paper's city uses [0, 1000]: with scale-only
+        normalisation the city landed in [+0.14, +1.87], so roughly half of it
+        fell outside anything the encoder saw during training. Routing depends
+        on relative geometry, not on absolute position, so centring loses no
+        information -- the depot is supplied separately to the scorer and never
+        was an encoder input.
+
+        On training batches the centroid is ~0, so this is close to a no-op
+        there; it is the evaluation frames that it rescues.
+        """
         f = node_features.clone()
+        f[..., :2] -= f[..., :2].mean(dim=1, keepdim=True)
         f[..., 0] /= self.xy_scale
         f[..., 1] /= self.xy_scale
         if self.is_3d:
@@ -815,6 +830,19 @@ class TENMATrainer:
         if "sd" in sd and "encoder" not in sd:
             sd = sd["sd"]
         self.encoder.load_state_dict(sd["encoder"])
+        # Checkpoints trained before the altitude head was made anchor-conditioned
+        # have a half-width alt_mean input. Loading them would either crash with a
+        # shape error or, worse, be silently patched around - and those weights
+        # encode a policy that scored 0% high-priority QoS. Refuse them by name.
+        stale = sd["decoder"].get("alt_mean.0.weight")
+        if stale is not None and hasattr(self.decoder, "alt_mean"):
+            expected = self.decoder.alt_mean[0].weight.shape
+            if tuple(stale.shape) != tuple(expected):
+                raise RuntimeError(
+                    f"checkpoint predates the anchor-conditioned altitude head "
+                    f"(alt_mean.0.weight {tuple(stale.shape)} vs {tuple(expected)}). "
+                    f"Its altitude head could not see the chosen anchor and "
+                    f"collapsed to a constant H; retrain rather than reuse it.")
         self.decoder.load_state_dict(sd["decoder"])
         self.critic.load_state_dict(sd["critic"])
         if "opt_actor" in sd:

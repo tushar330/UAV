@@ -7,7 +7,7 @@ Empirical CDF of the per-node achieved data rate for HIGH-priority nodes,
 one curve per policy, log-scaled rate axis, with the 38 Mbps QoS floor as a
 vertical reference. Message: ATOM-3D-VoI shifts the entire distribution to
 the right - only ~10 % of its high-priority nodes fall below the floor,
-versus ~24 % (2D-AUTO) and ~30 % (3D-GNN), consistent with Figure 5.
+versus ~24 % (2D-AUTO) and ~17 % (Two-Stage), consistent with Figure 5.
 
 DATA
 ----
@@ -27,7 +27,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from common_style import setup_style, COLORS
-from common_plot import save_figure, apply_labels
+from common_plot import save_figure, apply_labels, present_methods
 
 
 # =============================================================================
@@ -43,13 +43,16 @@ QOS_FLOOR_MBPS = 38.0     # high-priority rate floor (DATA_SPEC)
 
 METHOD_STYLE = [
     ("2d_auto", "2D-AUTO", "#9E9E9E", "--", 1.6),
-    ("3d_gnn", "3D-GNN", "#FB8C00", "-.", 1.8),
+    ("two_stage", "Two-Stage (decoupled)", "#FB8C00", "-.", 1.8),
+    ("coupled_greedy", "Coupled-Greedy (ablation)", "#64B5F6", (0, (3, 1, 1, 1)), 1.6),
     ("atom3d", "ATOM-3D-VoI (Ours)", COLORS["ours"], "-", 2.6),
 ]
 
 # Labels describe whatever actually produced the numbers on disk (the
 # exporter's results_data/labels.json); unchanged in placeholder mode.
-METHOD_STYLE = apply_labels(METHOD_STYLE)
+# This figure pools every city seed, so 2D-AUTO is labelled with the altitude
+# range it actually flew across them, not the canonical scene's single value.
+METHOD_STYLE = apply_labels(METHOD_STYLE, aggregate=True)
 
 
 # =============================================================================
@@ -62,7 +65,7 @@ def generate_placeholder_rate_samples(n=2000, seed=23):
     38 Mbps matches Figure 5 exactly:
         ATOM-3D-VoI  P(rate < 38) = 0.10   (90 % satisfied)
         2D-AUTO      P(rate < 38) = 0.24   (76 % satisfied)
-        3D-GNN       P(rate < 38) = 0.30   (70 % satisfied)
+        Two-Stage    P(rate < 38) = 0.17   (83 % satisfied)
     Schema: {method_key: (n,) float array of Mbps, "placeholder": True}
     """
     rng = np.random.default_rng(seed)
@@ -71,7 +74,8 @@ def generate_placeholder_rate_samples(n=2000, seed=23):
     params = {
         "atom3d": (0.35, -1.2816),   # 10th percentile at the floor
         "2d_auto": (0.45, -0.7063),  # 24th percentile
-        "3d_gnn": (0.50, -0.5244),   # 30th percentile
+        "two_stage": (0.44, -0.9542),       # 17th percentile
+        "coupled_greedy": (0.38, -1.1264),  # 13th percentile
     }
     data = {}
     for m, (sigma, z) in params.items():
@@ -102,7 +106,8 @@ def load_rate_results():
 def plot_rate_cdf(data):
     fig, ax = plt.subplots(figsize=(7.4, 5.0))
 
-    for key, label, color, ls, lw in METHOD_STYLE:
+    style = present_methods(METHOD_STYLE, data)
+    for key, label, color, ls, lw in style:
         x = np.sort(np.asarray(data[key], float))
         cdf = np.arange(1, len(x) + 1) / len(x)
         ax.semilogx(x, cdf, color=color, ls=ls, lw=lw, label=label,
@@ -114,22 +119,39 @@ def plot_rate_cdf(data):
     ax.text(QOS_FLOOR_MBPS * 1.06, 0.03, "QoS floor\n38 Mbps", fontsize=8,
             color="#E53935", ha="left", va="bottom")
 
-    for key, label, color, *_ in METHOD_STYLE:
+    # Methods can tie exactly on the below-floor fraction (Two-Stage and
+    # Coupled-Greedy do), which would stack two labels on one spot: nudge a
+    # repeat down so both stay readable.
+    placed: list[float] = []
+    for key, label, color, *_ in style:
         x = np.asarray(data[key], float)
         frac = float((x < QOS_FLOOR_MBPS).mean())
         ax.scatter(QOS_FLOOR_MBPS, frac, s=34, facecolor=color,
                    edgecolor="black", linewidths=0.5, zorder=7)
-        ax.annotate(f"{frac * 100:.0f}%", xy=(QOS_FLOOR_MBPS, frac),
-                    xytext=(-30, 2), textcoords="offset points", fontsize=7.5,
+        dy = 2 - 11 * sum(abs(frac - p) < 0.01 for p in placed)
+        placed.append(frac)
+        # "below" is load-bearing: without it a reader can take the low number
+        # on our curve for the worse result rather than the better one.
+        ax.annotate(f"{frac * 100:.0f}% below", xy=(QOS_FLOOR_MBPS, frac),
+                    xytext=(-52, dy), textcoords="offset points", fontsize=7.5,
                     color=color, fontweight="bold")
 
+    # The left plateau is the unserved mass sitting at the ~0 Mbps floor of the
+    # export, far off this log scale. Unlabelled it reads as "a low but usable
+    # rate", which is the opposite of what it means.
+    ax.annotate("left plateau = unserved nodes (rate $\\approx$ 0)",
+                xy=(0.03, 0.13), xycoords="axes fraction", fontsize=8,
+                style="italic", color="0.35", ha="left")
     ax.annotate("Ours shifts the whole distribution right →",
-                xy=(0.97, 0.30), xycoords="axes fraction", fontsize=8.5,
+                xy=(0.97, 0.21), xycoords="axes fraction", fontsize=8.5,
                 style="italic", color=COLORS["ours"], ha="right")
 
     ax.set_xlabel("Achieved Rate (Mbps)")
     ax.set_ylabel("CDF")
-    ax.set_xlim(8, 300)
+    # Right limit follows the data: a fixed 300 Mbps left over half the axis
+    # empty, since no node clears ~52 Mbps.
+    peak = max(float(np.max(np.asarray(data[k], float))) for k, *_ in style)
+    ax.set_xlim(8, peak * 1.15)
     ax.set_ylim(0, 1.0)
     ax.set_title(TITLE, fontsize=12, fontweight="bold", pad=12)
     ax.spines[["top", "right"]].set_visible(False)

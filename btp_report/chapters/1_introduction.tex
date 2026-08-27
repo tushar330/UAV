@@ -1,0 +1,62 @@
+\chapter{Introduction}
+\label{chap:intro}
+\noindent \rule{6.6in}{0.01in}
+\minitoc
+\newpage
+
+\section{Background}
+
+Sensing hardware has become inexpensive enough that municipal deployments of several hundred devices are unremarkable. What has not become inexpensive is the communication infrastructure that would let all of them report continuously. A device sustaining a long-range radio link draws power at a rate difficult to reconcile with a battery expected to last years, and running fixed backhaul to every installation is rarely economic.
+
+A common way around this is to stop asking the sensors to reach a distant base station and instead bring a receiver to them. An unmanned aerial vehicle departs from a depot, visits a sequence of positions above the deployment, gathers what it can from each, and returns. Because the aircraft approaches to within tens of metres, each sensor transmits over a short link at low power, and the burden of covering distance moves from the sensor battery to the aircraft battery. That battery is itself severely limited, which is what makes the trajectory a genuine optimisation problem rather than a matter of visiting every device in turn.
+
+The formulation this project takes as its starting point is the AUTO framework of Dong, Jiang and Peng \cite{paperA}, in which a fleet of aircraft charges a set of ground devices by wireless power transfer and then collects their data, minimising the total energy $\sum_j E_j$ subject to serving every device exactly once. Their energy model decomposes into flight, transfer and collection terms, $E_j = E^F_j + E^T_j + E^C_j$; the charging and collection times are obtained in closed form from the Karush--Kuhn--Tucker conditions, and the visiting order is produced by a graph-attention model trained with an actor--critic method.
+
+It also contains an assumption that is easy to overlook. In their formulation the flight height is a single constant $H_F$, fixed at $20$~m throughout, and the optimisation ranges only over how many aircraft to deploy, which devices to associate with which stop, and in what order the stops are visited. Every device is served by its own hover, from directly overhead, at that one height. The same one-device-per-hover structure appears in the three-dimensional sensing formulation of Liu et al. \cite{paperB}, from which this report borrows its angular reach constraint. Where terrain is genuinely flat and every device has the same requirements, this costs little. The subject of this report is what it costs when neither condition holds.
+
+\section{Motivation}
+
+Two observations motivate the work, and they interact in a way that is not obvious until stated together.
+
+\subsection{Sensors are not interchangeable}
+
+Deployments are often described as though every device carried equivalent traffic, whereas real installations are heterogeneous in a way that matters operationally. A vibration sensor on the backup generator of a hospital and a soil-moisture probe in a municipal park may be physically identical and hold the same number of megabytes, but the consequence of failing to collect from them differs by orders of magnitude.
+
+An objective that minimises energy subject to collecting everything treats the two identically, because the constraint is satisfied as soon as the bytes have moved. It says nothing about how well the link performed while they moved. In practice a device served over a marginal link is served slowly, occupies the aircraft longer, and in a mission that exhausts its energy partway through may not be served at all. A planner with no notion of relative importance has no basis for deciding which devices to sacrifice when the budget is insufficient, and so it sacrifices them arbitrarily.
+
+\subsection{Altitude is the lever that priority requires}
+
+The mechanism for acting on those priorities is precisely the degree of freedom the planar formulation removes.
+
+Achievable rate falls with the distance between aircraft and device, and in an urban environment the fall is steep. A device with a demanding rate requirement can therefore only be served from close range, and the only way to be at close range to a device on the ground is to descend. At the same time the number of devices visible from a single hover grows with height, because the antenna footprint widens as the aircraft climbs. Height trades coverage against link quality, and the balance depends on which devices are being served.
+
+A fixed-altitude planner cannot express that trade-off, and the altitude it must adopt is not a free choice: it has to clear the tallest structure on the map with a safety margin, which on the city model used here gives approximately $47$~m. As Chapter~\ref{chap:method} shows quantitatively, the most demanding class of sensors can only be served from within roughly $21$~m. The two figures are irreconcilable. A planar planner is not merely inefficient on those devices; it cannot serve them at all, and no improvement to its routing will alter that.
+
+Priority is worth introducing only if the planner possesses a mechanism capable of acting on it, and here that mechanism is altitude.
+
+\begin{figure}[!ht]
+\centering
+\includegraphics[width=0.88\textwidth]{figure01_environment.pdf}
+\caption[Synthetic urban deployment]{The synthetic urban deployment used throughout this report. Five hundred sensors are distributed over a $1000 \times 1000$~m area containing buildings of varying height, coloured by criticality class. Sensors sit both at ground level and on rooftops, so their elevations differ, which is what causes the clearance requirement to bind.}
+\label{fig:environment}
+\end{figure}
+
+\section{Problem Statement}
+
+A single rotary-wing aircraft departs from a depot and must gather data from $N$ stationary sensors whose positions and elevations are known. Each sensor belongs to one of three criticality classes, and each class carries a minimum data rate the link must achieve for a collection to count as successful. The aircraft chooses hover positions in three-dimensional space, subject to a minimum clearance above any sensor it serves and to altitude bounds, and is constrained by a fixed mission energy budget. The objective is to maximise service quality delivered within that budget, with sensors weighted by criticality.
+
+Two aspects distinguish this from the formulation it extends. Altitude is a decision variable at every hover rather than a mission-wide constant; and the mission operates under an energy \emph{budget} rather than a requirement to serve every sensor. The second change is developed in Section~\ref{sec:regime}. Briefly, under a serve-everything formulation with quality as a hard constraint, every feasible plan attains perfect quality by construction, and the metric the contribution is supposed to improve becomes incapable of distinguishing one plan from another.
+
+\section{Contributions}
+
+\begin{enumerate}
+\item A three-dimensional extension in which hover placement and altitude are decided jointly, with per-sensor rate floors entering as hard feasibility constraints rather than penalty terms.
+
+\item An energy-budgeted evaluation protocol under which all methods expend approximately equal energy, so that energy is an experimental control and delivered quality is the quantity compared. This is what makes the phrase \emph{better quality at comparable energy} measurable rather than rhetorical.
+
+\item An evaluation over twenty independently generated layouts using paired statistical tests, reporting both parametric and rank-based results, against a strong decoupled three-dimensional baseline as well as the planar starting point.
+
+\item An ablation establishing that joint decision-making alone does not account for the improvement, and attributing the gain specifically to the continuous altitude refinement. This constrains what the work may claim, and is reported in those terms in Section~\ref{sec:ablation}.
+\end{enumerate}
+
+\noindent Chapter~\ref{chap:litsurvey} reviews related work and identifies the gap; Chapter~\ref{chap:objectives} states the objectives and deliverables; Chapter~\ref{chap:method} develops the model and the planner; Chapter~\ref{chap:tasks} records the work carried out, including the designs that were discarded; Chapter~\ref{chap:results} reports the results; and Chapter~\ref{chap:conclusion} concludes.

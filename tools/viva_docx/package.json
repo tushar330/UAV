@@ -1,0 +1,7 @@
+{
+  "name": "viva-docx-builder",
+  "private": true,
+  "description": "Builds BTP_Viva_Study_Guide.docx from VIVA_STUDY_GUIDE.md",
+  "scripts": { "build": "node build_docx.js" },
+  "dependencies": { "docx": "^9.0.0" }
+}

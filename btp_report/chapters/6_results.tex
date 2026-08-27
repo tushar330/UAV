@@ -1,0 +1,153 @@
+\chapter{Results and Discussion}
+\label{chap:results}
+\noindent \rule{6.6in}{0.01in}
+\minitoc
+\newpage
+
+\section{Experimental Protocol}
+
+All results were obtained on twenty independently generated city layouts, indexed by seeds $42$ through $61$. Every method was evaluated on the identical set of layouts, which makes the comparison paired and removes the between-layout variance from the analysis. Each method received the same mission energy budget of $82.65$~kJ, derived as $0.65$ times the energy the planar baseline requires to cover an entire deployment. The budget is computed from a single reference layout and is therefore constant across experiments, so results obtained at different sample sizes remain comparable.
+
+Two tests are reported for every comparison. The paired Student $t$ test \cite{student1908probable} is the conventional choice; the Wilcoxon signed-rank test \cite{wilcoxon1945individual} is reported alongside it because it does not assume normality and is not distorted by individual extreme layouts. Where they disagree, the disagreement is stated rather than the more favourable figure selected. Confidence intervals use the Student $t$ multiplier appropriate to the sample size.
+
+\section{Overall Comparison}
+
+\begin{table}[!ht]
+\centering
+\caption[Overall performance across twenty layouts]{Overall performance across twenty layouts under a common energy budget. Values are means with $95\%$ confidence intervals.}
+\label{tab:main}
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Method} & \textbf{Energy (kJ)} & \textbf{High (\%)} & \textbf{Medium (\%)} & \textbf{Low (\%)} \\
+\midrule
+Planar baseline & $81.5 \pm 0.5$ & $0.6 \pm 0.9$ & $61.0 \pm 5.1$ & $66.7 \pm 4.2$ \\
+Decoupled & $79.4 \pm 1.0$ & $54.9 \pm 5.7$ & $66.8 \pm 5.2$ & $52.7 \pm 5.4$ \\
+Coupled-greedy (ablation) & $80.1 \pm 1.2$ & $54.9 \pm 5.6$ & $71.5 \pm 5.1$ & $64.9 \pm 6.1$ \\
+\textbf{Proposed} & $\mathbf{78.5 \pm 1.5}$ & $\mathbf{70.2 \pm 7.3}$ & $\mathbf{80.8 \pm 3.8}$ & $\mathbf{74.2 \pm 6.2}$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The first observation concerns the planar baseline, which serves $0.6\%$ of high-priority sensors. As established in Section~\ref{sec:tension}, it is obliged to cruise at approximately $47$~m while a high-priority sensor requires the aircraft within $21$~m, so the class is unreachable by construction; the small non-zero value comes from the few critical sensors on tall structures, whose elevation reduces the effective separation sufficiently. The second observation is that all four methods expend energy within a narrow range, from $78.5$ to $81.5$~kJ, which is by design and is what makes the satisfaction columns interpretable.
+
+\begin{figure}[!ht]
+\centering
+\includegraphics[width=0.92\textwidth]{figure05_qos_comparison.pdf}
+\caption[Per-class satisfaction across methods]{Satisfaction by criticality class. Error bars are $95\%$ Student $t$ confidence intervals over twenty layouts, and the markers above each group denote paired significance against the planar baseline. The disparity in the high-priority group is the principal result of this work.}
+\label{fig:qos}
+\end{figure}
+
+\section{Comparison Against the Planar Baseline}
+
+\begin{table}[!ht]
+\centering
+\caption[Paired comparison against the planar baseline]{Paired comparison of the proposed method against the planar baseline over twenty layouts.}
+\label{tab:vs2d}
+\begin{tabular}{lccccc}
+\toprule
+\textbf{Metric} & \textbf{Baseline} & \textbf{Proposed} & \textbf{Difference} & \textbf{$t$ test} & \textbf{Wilcoxon} \\
+\midrule
+High (\%) & $0.6$ & $70.2$ & $+69.6$ & $<0.0001$ & $0.0001$ \\
+Medium (\%) & $61.0$ & $80.8$ & $+19.8$ & $<0.0001$ & $0.0002$ \\
+Low (\%) & $66.7$ & $74.2$ & $+7.5$ & $0.0233$ & $0.0486$ \\
+Energy (kJ) & $81.5$ & $78.5$ & $-3.0$ & $0.0005$ & $0.0003$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Satisfaction on the critical class rises from $0.6\%$ to $70.2\%$, with the proposed method superior on every one of the twenty layouts. The medium class improves from $61.0\%$ to $80.8\%$, superior on eighteen of twenty.
+
+The low-priority result requires a qualification, made here rather than left to the reader. Although the improvement of $7.5$ percentage points is nominally significant under both tests, the Wilcoxon value of $0.0486$ lies immediately below the conventional threshold and the method wins on fifteen of twenty layouts rather than the near-unanimous margins seen elsewhere. It is therefore not advanced as a principal finding; the defensible statement is that low-priority service is not degraded, and that is how the conclusions describe it.
+
+A second qualification concerns energy. The proposed method expends $3.0$~kJ less than the baseline and the difference is statistically significant, but this is not an efficiency claim and none is made anywhere in this report. Under a budgeted regime both methods stop when the budget is exhausted, and both in fact stop slightly short because a hover cannot be flown in part. The proposed method uses larger clusters and therefore coarser increments, so it stops marginally further short. Leaving budget unspent is not a virtue, and the correct reading of the energy column is that the methods are comparable, which is what the design was intended to ensure.
+
+\begin{figure}[!ht]
+\centering
+\includegraphics[width=0.92\textwidth]{figure06_energy_comparison.pdf}
+\caption[Energy expenditure by component]{Energy decomposed into flight, hover and communication components. All methods spend approximately the common budget, so the figure should be read for the distribution between components rather than for a winner.}
+\label{fig:energy}
+\end{figure}
+
+\section{Comparison Against the Decoupled Baseline}
+
+The planar comparison, while emphatic, is against a method that cannot physically perform the task. The stronger test is against the decoupled planner, which has the same altitude freedom and differs only in resolving placement before altitude.
+
+\begin{table}[!ht]
+\centering
+\caption[Paired comparison against the decoupled baseline]{Paired comparison against the decoupled three-dimensional baseline over twenty layouts.}
+\label{tab:vsts}
+\begin{tabular}{lccccc}
+\toprule
+\textbf{Metric} & \textbf{Decoupled} & \textbf{Proposed} & \textbf{Difference} & \textbf{$t$ test} & \textbf{Wilcoxon} \\
+\midrule
+High (\%) & $54.9$ & $70.2$ & $+15.3$ & $0.0009$ & $0.0015$ \\
+Medium (\%) & $66.8$ & $80.8$ & $+14.1$ & $0.0013$ & $0.0010$ \\
+Low (\%) & $52.7$ & $74.2$ & $+21.5$ & $<0.0001$ & $0.0001$ \\
+Energy (kJ) & $79.4$ & $78.5$ & $-0.9$ & $0.3317$ & $0.4980$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The proposed method is significantly better on all three classes under both tests, while the energy difference is not significant under either. This is the form of result the budgeted protocol was designed to produce: indistinguishable expenditure, and a difference in what that expenditure achieved.
+
+The largest margin occurs on the low-priority class, where the decoupled baseline reaches only $52.7\%$, below even the planar baseline. The reason is structural. Its first stage places hovers without regard to the rate requirement, so many sensors are subsequently found to be served below their floor; repairing them requires a second pass of shallow hovers paid for from the same fixed budget, and the energy consumed in repair is unavailable for coverage. The sensors that lose it are the numerous low-priority ones. The decoupled planner recovers its critical sensors, but at the expense of the bulk of the deployment.
+
+An earlier ten-layout campaign left the critical-class comparison ambiguous, at $p = 0.033$ under the $t$ test but $p = 0.063$ under Wilcoxon. Extending to twenty layouts resolved the ambiguity, and the two tests now agree closely on every class.
+
+\section{Ablation: Locating the Source of the Gain}
+\label{sec:ablation}
+
+The ablation was intended to confirm that the joint formulation was responsible for the improvement. It established the opposite, and is reported here because it constrains what this work may claim.
+
+\begin{table}[!ht]
+\centering
+\caption[Ablation of the refinement stage]{Ablation isolating the contribution of the continuous altitude refinement. Means over twenty layouts.}
+\label{tab:ablation}
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Variant} & \textbf{Joint} & \textbf{Refine} & \textbf{High (\%)} & \textbf{Low (\%)} \\
+\midrule
+Decoupled baseline & No & No & $54.9$ & $52.7$ \\
+Coupled-greedy & Yes & No & $54.9$ & $64.9$ \\
+Proposed & Yes & Yes & $\mathbf{70.2}$ & $\mathbf{74.2}$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+On the critical class the coupled-greedy variant and the decoupled baseline are indistinguishable. Their means agree to the reported precision at $54.9\%$, the mean paired difference is $+0.00$ percentage points, and the paired $t$ test returns $p = 1.000$. Deciding placement and altitude jointly, without subsequent refinement, delivers no advantage whatever on the class the method exists to serve.
+
+The refinement supplies the entire difference, raising critical satisfaction from $54.9\%$ to $70.2\%$, a paired improvement of $15.3$ points at $p = 0.0007$, and medium satisfaction by $9.3$ points at $p = 0.0026$.
+
+The coupling is not wholly without effect: on the low-priority class the coupled-greedy variant improves on the decoupled baseline by $12.2$ points ($p = 0.0032$), because it avoids the wasteful repair pass. Its contribution is thus to protect bulk coverage rather than to serve critical sensors.
+
+Three consequences follow. First, the mechanism this work demonstrates is the continuous altitude refinement and not the joint formulation as such; a claim that coupling outperforms decoupling on critical sensors would be contradicted by Table~\ref{tab:ablation}. Second, the computational cost of the refinement is load-bearing rather than incidental, since the stage requires roughly thirty minutes per layout and supplies the entire critical-class advantage. Third, the greedy construction is evidently myopic in a way the refinement corrects: because each cluster is fixed at formation, the constructor cannot anticipate that admitting a critical sensor to a later cluster would have been cheaper than forcing an early cluster low, and the measured gap is the value of undoing such decisions.
+
+\begin{figure}[!ht]
+\centering
+\includegraphics[width=0.86\textwidth]{figure10_altitude_distribution.pdf}
+\caption[Distribution of hover altitudes]{Distribution of hover altitudes per method. The planar baseline is a single spike at its fixed cruise height. The proposed method is bimodal, combining an efficient cruise mode with a distinct low-altitude service mode inside the band required by the critical floor.}
+\label{fig:altdist}
+\end{figure}
+
+\section{Behavioural Interpretation}
+
+Figures~\ref{fig:altitude} and \ref{fig:altdist} indicate what the planner does. The altitude distribution of the proposed method is clearly bimodal: an efficient cruise mode, and a separate service mode inside the band the critical floor requires. It is neither descending continuously, which would be prohibitive given the asymmetry of Equation~\eqref{eq:evert}, nor holding one compromise altitude. It descends where the constraint requires and climbs again afterwards.
+
+The decoupled baseline shows a superficially similar bimodality arising for a different reason: its low mode consists of repair hovers created after coverage was committed, and is therefore additional expenditure rather than an integrated decision. Figure~\ref{fig:trajectory} shows the distinction, with the descents of the proposed method occurring within the tour while those of the decoupled baseline are appended to it.
+
+\begin{figure}[!ht]
+\centering
+\includegraphics[width=0.92\textwidth]{figure07_trajectories_3d.pdf}
+\caption[Representative three-dimensional trajectories]{Representative trajectories over the deployment. The planar baseline is confined to one horizontal plane. The proposed method descends over concentrations of critical sensors and returns to cruise between them. The coupled-greedy ablation is omitted for legibility, since its route closely resembles that of the full method while its altitudes are less refined.}
+\label{fig:trajectory}
+\end{figure}
+
+\section{Threats to Validity}
+
+All layouts come from a single generator. Twenty samples establish that the result is not an artefact of one arrangement of sensors, but not that it holds for a different building density, elevation distribution or map size.
+
+The propagation model is line-of-sight with an urban exponent and does not represent blockage by the buildings the model otherwise contains. Since blockage would principally affect long links, and the method deliberately shortens the links to its critical sensors, the omission is more likely to understate than overstate the reported advantage; this expectation has not been verified.
+
+The rate floors were chosen to span the achievable band, as described in Section~\ref{sec:tasks_alpha}. Different floors would give different radii and therefore different margins. The qualitative conclusion depends only on the critical radius being smaller than the mandatory cruise altitude, which is robust, but the numerical margins are tied to this calibration.
+
+Finally, the comparison is between deterministic planners with complete prior knowledge of sensor positions, and no claim is made regarding partial information or the disturbances excluded in Chapter~\ref{chap:objectives}.

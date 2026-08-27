@@ -21,7 +21,8 @@ available at run time, and reports what it actually was:
 slot     without a checkpoint             with a checkpoint
 ======== ================================ ==============================
 2d_auto  per-node NN+2-opt tour, fixed H  (unchanged - not a learned method)
-3d_gnn   QoS-blind greedy footprint cover ``3d_gnn.pt`` learned policy
+two_stage    decoupled cover + repair     (unchanged - not a learned method)
+coupled_greedy coupled, no local search   (unchanged - ablation of ours)
 atom3d   strong coupled planner           ``3d_attention_priority_cmdp.pt``
 ======== ================================ ==============================
 
@@ -62,11 +63,12 @@ from ..env.city_adapter import (
     PAPER_FIGURES_DIR, PRIORITY_ORDER,
 )
 from ..training import TENMATrainer, TrainConfig
+from ..utils.routing import nn_2opt_tour
 from .heuristic_baseline import _plan_from_steps
 
 # The deterministic planners live in the root-level `experiments` package.
 from experiments.two_stage_vs_coupled import (          # noqa: E402
-    d_max_of, make_channel_consts, plan_coupled, plan_energy_min,
+    d_max_of, make_channel_consts, plan_coupled, plan_two_stage, rate_of,
 )
 from experiments.strong_coupled import plan_coupled_strong  # noqa: E402
 
@@ -80,17 +82,28 @@ RESULTS_DATA_DIR = PAPER_FIGURES_DIR / "results_data"
 # [H_min, H_max] band so a planner can choose a deep dive or a wide high hover.
 ALTITUDE_GRID: Tuple[float, ...] = (30, 45, 60, 80, 100, 120, 140)
 
-# Per-class QoS floors are read from the city itself (each IoTNode carries its
-# own required_rate). The scorer, however, derives its per-class satisfaction
-# masks from `priority.R_min` in params.yaml, which drifted from the city
-# (config says medium=28 Mbps, the city says 25). We override that mapping
-# IN MEMORY so the masks line up; params.yaml on disk is never touched, so no
-# training run is affected.
-CITY_CLASS_FLOORS = {"high": 38e6, "medium": 25e6, "low": 8e6}
+# Per-class QoS floors, RECALIBRATED so that all three actually bind.
+#
+# The city pickle ships 38/25/8 Mbps. At alpha=3 those map to maximum slant
+# distances of 21.1 / 94.9 / 690.9 m, and on a 1000 m map a 690 m reach can
+# never fail: the low-priority floor is unsatisfiable to violate, so its bar
+# measured footprint coverage rather than QoS, and medium only bound at the
+# edge of a high hover's cone. Only the critical class exercised a constraint.
+#
+# Rate is compressed (rate ~ log(1/d^3)), so the whole usable band is 25-44
+# Mbps; these values space the three classes evenly across it:
+#     high 38.0 -> 21 m      medium 32.5 -> 40 m      low 29.0 -> 60 m
+# Applied to the city instances via `city_adapter.build_instance(class_floors=)`
+# and to the scorer's class masks below, so both halves agree. `synthetic_city`
+# and its pickle stay locked; params.yaml on disk is never touched, so no
+# training run is affected by an export.
+CITY_CLASS_FLOORS = {"high": 38.0e6, "medium": 32.5e6, "low": 29.0e6}
 
 # Figure slot -> checkpoint tag that would upgrade it to a learned result.
+# Only the 'atom3d' slot can be filled by a trained policy. The former
+# '3d_gnn' entry pointed at a checkpoint that was never trained and does not
+# exist, which risked implying a learned GNN baseline the paper never ran.
 LEARNED_CHECKPOINTS = {
-    "3d_gnn": "3d_gnn",
     "atom3d": "3d_attention_priority_cmdp",
 }
 
@@ -98,6 +111,23 @@ LEARNED_CHECKPOINTS = {
 # undefined, so they are placed at this floor: visibly off-scale to the left
 # rather than silently dropped from the distribution.
 UNSERVED_RATE_MBPS = 1e-3
+
+# --- Budget-constrained collection (formulation Q4/Q6) -----------------------
+# Without a budget the formulation is "minimize energy subject to serve-all +
+# per-class QoS as HARD constraints", under which every feasible plan scores
+# 100% on every class by construction -- QoS carries no information and the
+# comparison collapses to energy alone.
+#
+# With a mission energy budget B, no planner can serve everything: each spends
+# ~B (so energy is comparable BY CONSTRUCTION) and they differ in how much QoS
+# that budget buys. That is the axis the contribution is actually about.
+#
+# Baselines fly their own tour order until the budget runs out. Only the
+# coupled family reorders its hovers by value, because prioritization IS the
+# method under test - giving the baselines the same reordering would hand them
+# the contribution for free. 'coupled_greedy' is an ablation OF the method, so
+# it is treated as ours, not as a baseline.
+BASELINE_KEYS = ("2d_auto", "two_stage")
 
 
 # ---------------------------------------------------------------------------
@@ -107,7 +137,8 @@ UNSERVED_RATE_MBPS = 1e-3
 class MethodRun:
     """One method slot evaluated over one or more city realizations."""
 
-    key: str                       # figure slot key (2d_auto / 3d_gnn / atom3d)
+    key: str                       # slot key (2d_auto / two_stage /
+                                   #           coupled_greedy / atom3d)
     label: str                     # honest label describing what actually ran
     source: str                    # provenance sentence for labels.json
     metrics: List[dict] = field(default_factory=list)   # scorer output per city
@@ -173,29 +204,181 @@ def _score_hovers(trainer, instance: CityInstance, hovers) -> dict:
         refine_routing=True, collect_trace=True)
 
 
-def run_2d_auto(trainer, instance: CityInstance, altitude: float) -> dict:
-    """2D-AUTO: NN+2-opt visiting every node individually at one fixed altitude."""
-    n = instance.num_nodes
-    anchors = np.arange(n, dtype=np.int64)[None, :]
-    altitudes = np.full((1, n), altitude, np.float32)
-    served = np.zeros((1, n, n), bool)
-    served[0, np.arange(n), np.arange(n)] = True
-    plan = _plan_from_steps(anchors, altitudes, served, 1, n, n, trainer.device)
-    return trainer._partition_and_evaluate(
-        plan, instance.node_features, R_min=0.0, use_service_altitude=False,
-        node_weights=instance.node_weights, node_rmin=instance.node_rmin,
-        refine_routing=True, collect_trace=True)
+def hover_values(trainer, instance: CityInstance, hovers, chan):
+    """Per-hover (class tier, weighted value) used to spend the budget.
 
+    ``value`` is Σ w_i·D_i·1[QoS met] (Q5): a node contributes only if its link
+    actually clears its own floor, so a hover that "covers" critical nodes too
+    weakly to serve them scores nothing for them.
 
-def run_blind_3d(trainer, instance: CityInstance, chan) -> dict:
-    """Priority-blind greedy footprint cover: 3D, altitude varies, QoS ignored."""
+    ``tier`` is the most critical class the hover actually serves (0=high,
+    1=medium, 2=low/none). Ordering by value ALONE does not prioritize critical
+    nodes: this city has 350 low-priority nodes against 50 high-priority ones,
+    so the low class carries the larger total value mass and a purely
+    value-greedy schedule serves bulk low-priority hovers first. That is the
+    "soft weights are cosmetic" failure mode - the weights never bind. Sorting
+    by tier first makes criticality an ordering constraint rather than a
+    preference, which is what "priority-aware" has to mean here.
+    """
     nf = instance.node_features.numpy()[0]
-    hovers = plan_energy_min(trainer, nf[:, :2], nf[:, 2], nf[:, 3], ALTITUDE_GRID, chan)
-    return _score_hovers(trainer, instance, hovers)
+    xy, z, dem = nf[:, :2], nf[:, 2], nf[:, 3]
+    w = instance.node_weights[0].numpy()
+    rmin = instance.node_rmin[0].numpy()
+    tiers = np.full(len(hovers), 2, int)
+    values = np.zeros(len(hovers), float)
+    high_mask = instance.class_mask("high")
+    med_mask = instance.class_mask("medium")
+    for k, (a, H, idx) in enumerate(hovers):
+        idx = np.asarray(idx, int)
+        if idx.size == 0:
+            continue
+        rho = np.linalg.norm(xy[idx] - xy[a], axis=1)
+        d3d = np.sqrt(rho ** 2 + (H - z[idx]) ** 2 + 1e-10)
+        met = rate_of(d3d, chan) >= rmin[idx]
+        values[k] = float((w[idx] * dem[idx] * met).sum())
+        served_ok = idx[met]
+        if high_mask[served_ok].any():
+            tiers[k] = 0
+        elif med_mask[served_ok].any():
+            tiers[k] = 1
+    return tiers, values
 
 
-def run_coupled(trainer, instance: CityInstance, chan, *,
-                strong: bool, rmin_override: Optional[np.ndarray] = None) -> dict:
+def cached_hovers(cache_path: Optional[str], key: tuple, build):
+    """Build a hover plan, reusing a cached one when the inputs are identical.
+
+    ``plan_coupled_strong`` takes ~23 min at N=500, which otherwise has to be
+    paid again for every change to the budget or the figures - none of which
+    affect the plan itself. The cache key covers everything the plan depends
+    on (method, city seed, planner strength, 2D altitude), so a stale entry
+    cannot be silently reused after those change.
+    """
+    if not cache_path:
+        return build()
+    cache = {}
+    if os.path.exists(cache_path):
+        try:
+            with open(cache_path, "rb") as f:
+                cache = pickle.load(f)
+        except (OSError, EOFError, pickle.UnpicklingError):
+            cache = {}                      # unreadable cache is not fatal
+    if key in cache:
+        print(f"    [cache] reusing {key[0]} plan ({len(cache[key])} hovers)")
+        return cache[key]
+    hovers = build()
+    cache[key] = hovers
+    os.makedirs(os.path.dirname(os.path.abspath(cache_path)) or ".", exist_ok=True)
+    with open(cache_path, "wb") as f:
+        pickle.dump(cache, f, protocol=pickle.HIGHEST_PROTOCOL)
+    return hovers
+
+
+def route_order(trainer, instance: CityInstance, hovers):
+    """Sort hovers into the order the UAV would actually fly them.
+
+    Truncation must happen along the ROUTE, not along whatever order a planner
+    happened to construct its hovers in. 2D-AUTO, for instance, emits one hover
+    per node in node-index order; cutting a prefix of that would hand it an
+    arbitrary set of nodes scattered across the whole city, and routing a
+    scattered set costs far more per node than routing a compact one. That
+    would understate the baseline for a reason that has nothing to do with the
+    method under test. Ordering by the tour first makes a budget cut mean
+    "flew the route until the energy ran out" for every method alike.
+    """
+    if not hovers:
+        return list(hovers)
+    xy = instance.node_features.numpy()[0][:, :2]
+    pts = np.array([xy[a] for a, _H, _idx in hovers], float)
+    depot = np.asarray(trainer.depot, float)[:2]
+    return [hovers[i] for i in nn_2opt_tour(pts, depot)]
+
+
+def fit_to_budget(trainer, instance: CityInstance, hovers, budget_j: float):
+    """Longest prefix of ``hovers`` whose scored mission energy fits ``budget_j``.
+
+    Every candidate is priced by the canonical scorer, so the energy reported
+    for a budgeted mission is the same quantity as an unbudgeted one - the
+    budget selects the plan, it never estimates its cost. Total energy grows
+    with the number of hovers (more stops, longer tour), so the feasible
+    prefixes form a contiguous range and a binary search finds the longest.
+
+    Returns (kept_hovers, metrics) or (None, None) if even one hover overruns.
+    """
+    lo, hi, best = 1, len(hovers), (None, None)
+    while lo <= hi:
+        mid = (lo + hi) // 2
+        metrics = _score_hovers(trainer, instance, hovers[:mid])
+        if float(metrics["energy"][0]) <= budget_j:
+            best = (hovers[:mid], metrics)
+            lo = mid + 1
+        else:
+            hi = mid - 1
+    return best
+
+
+def apply_budget(trainer, instance: CityInstance, key: str, hovers, chan,
+                 budget_j: float, *, priority_schedule: bool = False):
+    """Fly ``hovers`` until the budget runs out.
+
+    Default: EVERY method flies its own planner's route order and stops when B
+    is spent. No method is reordered, so none is handed an advantage the others
+    do not get, and the comparison isolates what each planner's hover PLACEMENT
+    delivers per joule. This is the regime the figures use.
+
+    ``priority_schedule`` is the alternative: serve the critical class first.
+    It drives critical QoS to 100% (the planner can cover all 50 high-priority
+    nodes cheaply) but starves bulk coverage at tight budgets, so it answers a
+    different question - scheduling rather than placement - and is kept as a
+    secondary result rather than the headline.
+    """
+    ordered = route_order(trainer, instance, hovers)
+    if priority_schedule and key not in BASELINE_KEYS:
+        tiers, values = hover_values(trainer, instance, ordered, chan)
+        # Critical class first, then most value per stop within a class.
+        ordered = [ordered[i] for i in np.lexsort((-values, tiers))]
+    kept, metrics = fit_to_budget(trainer, instance, ordered, budget_j)
+    if kept is None:
+        raise ValueError(f"budget {budget_j/1e3:.0f} kJ too small for a single "
+                         f"'{key}' hover")
+    print(f"    {key:8s} budget-fit: {len(kept):4d}/{len(ordered):4d} hovers, "
+          f"{float(metrics['energy'][0])/1e3:6.1f} kJ")
+    return metrics
+
+
+def hovers_2d_auto(instance: CityInstance, altitude: float):
+    """2D-AUTO hovers: one per node, directly overhead, at one fixed altitude.
+
+    The altitude has to clear the tallest structure in the city by ``h_safe``,
+    because a fixed-altitude tour flies the same height everywhere. On this
+    city that is 47.4 m, which is far above the 21.1 m slant range the 38 Mbps
+    critical floor needs - a single altitude cannot both clear the skyline and
+    hold a strong uplink, and that trade is the baseline's defining weakness.
+    """
+    return [(i, altitude, np.array([i])) for i in range(instance.num_nodes)]
+
+
+def hovers_two_stage(trainer, instance: CityInstance, chan):
+    """DECOUPLED two-stage planner - the baseline the contribution is measured against.
+
+    Standard practice: place hovers first (QoS-blind energy-min cover), then fix
+    whatever violates its rate floor by adding shallow repair hovers. This is the
+    natural way to do 3D, and 'coupled beats decoupled' IS the paper's claim - so
+    this row, not the ablation, is what the contribution has to clear.
+
+    It replaces the former 'Blind-3D' slot, which was a degenerate control that
+    scored ~0-1% on every class (and whose key `3d_gnn` was a misnomer: no GNN
+    was ever involved). Beating it demonstrated nothing.
+    """
+    nf = instance.node_features.numpy()[0]
+    xy, z, dem = nf[:, :2], nf[:, 2], nf[:, 3]
+    rmin = instance.node_rmin[0].numpy()
+    dmax = d_max_of(rmin, chan)
+    return plan_two_stage(trainer, xy, z, dem, rmin, ALTITUDE_GRID, chan,
+                          trainer.H_min, trainer.H_max, trainer.h_safe, dmax)
+
+
+def hovers_coupled(trainer, instance: CityInstance, chan, *,
+                   strong: bool, rmin_override: Optional[np.ndarray] = None):
     """QoS-aware coupled planner (optionally with continuous-altitude local search)."""
     nf = instance.node_features.numpy()[0]
     xy, z, dem = nf[:, :2], nf[:, 2], nf[:, 3]
@@ -203,8 +386,63 @@ def run_coupled(trainer, instance: CityInstance, chan, *,
     dmax = d_max_of(rmin, chan)
     args = (trainer, xy, z, dem, rmin, ALTITUDE_GRID, chan,
             trainer.H_min, trainer.H_max, trainer.h_safe, dmax)
-    hovers = plan_coupled_strong(*args, restarts=1) if strong else plan_coupled(*args)
-    return _score_hovers(trainer, instance, hovers)
+    return plan_coupled_strong(*args, restarts=1) if strong else plan_coupled(*args)
+
+
+def hovers_learned(scorer, instance: CityInstance, ckpt_path: str, params: dict):
+    """Hover plan produced by a TRAINED policy, in the planners' own format.
+
+    Returning the same ``(anchor, H, served_idx)`` tuples the deterministic
+    planners emit means the learned policy flows through exactly the same
+    route-ordering, budget and scoring path - so a learned row and a planner row
+    in the same figure are directly comparable, and no separate accounting can
+    drift between them.
+
+    The policy is rebuilt from the architecture stored in its own checkpoint
+    (``cfg``), not from whatever the exporter happens to use for scoring.
+    """
+    sd = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+    cfg = (sd.get("sd", sd)).get("cfg", {})
+    policy = TENMATrainer(params, TrainConfig(
+        mode="3d", encoder=cfg.get("encoder", "attention"),
+        embed_dim=cfg.get("embed_dim", 128), num_heads=cfg.get("num_heads", 8),
+        ff_dim=cfg.get("ff_dim", 128), num_layers=cfg.get("num_layers", 3),
+        priority_feature=cfg.get("priority_feature", True),
+        cmdp=cfg.get("cmdp", True), device="cpu"))
+    policy.load_state_dict(sd)          # refuses pre-fix checkpoints by design
+    apply_city_depot(policy, instance)
+
+    with torch.no_grad():
+        plan, _ = policy._encode_decode(
+            instance.node_features, R_min=0.0, greedy=True,
+            node_rmin=instance.node_rmin, node_weights=instance.node_weights)
+    anchors = plan.anchors.cpu().numpy()[0]
+    altitudes = plan.altitudes.cpu().numpy()[0]
+    served = plan.served.cpu().numpy()[0]
+    active = plan.step_active.cpu().numpy()[0]
+    hovers = []
+    for t in range(len(anchors)):
+        if not active[t]:
+            continue
+        idx = np.flatnonzero(served[t])
+        if idx.size:
+            hovers.append((int(anchors[t]), float(altitudes[t]), idx))
+    return hovers
+
+
+def run_2d_auto(trainer, instance: CityInstance, altitude: float) -> dict:
+    """2D-AUTO scored over the whole city (serve-all, no budget)."""
+    return _score_hovers(trainer, instance, hovers_2d_auto(instance, altitude))
+
+
+def run_two_stage(trainer, instance: CityInstance, chan) -> dict:
+    return _score_hovers(trainer, instance, hovers_two_stage(trainer, instance, chan))
+
+
+def run_coupled(trainer, instance: CityInstance, chan, *,
+                strong: bool, rmin_override: Optional[np.ndarray] = None) -> dict:
+    return _score_hovers(trainer, instance, hovers_coupled(
+        trainer, instance, chan, strong=strong, rmin_override=rmin_override))
 
 
 # ---------------------------------------------------------------------------
@@ -347,16 +585,76 @@ def write_altitude_traces(runs: Sequence[MethodRun], instance: CityInstance,
     })
 
 
-def write_overall_metrics(runs: Sequence[MethodRun], instances) -> None:
+def _t_crit(df: int) -> float:
+    """Two-sided 95% Student-t critical value for ``df`` degrees of freedom.
+
+    The normal quantile 1.96 is only correct as df -> infinity. At the seed
+    counts these figures actually run (n = 5 -> df = 4, t = 2.776) it understates
+    every interval by 42%, which is exactly the kind of error a reviewer checks
+    first. SciPy is a declared dependency (PROJECT_SPEC), but this falls back to
+    a table so the exporter never dies for want of it.
+    """
+    if df < 1:
+        return float("nan")
+    try:
+        from scipy import stats
+        return float(stats.t.ppf(0.975, df))
+    except Exception:
+        table = {1: 12.706, 2: 4.303, 3: 3.182, 4: 2.776, 5: 2.571,
+                 6: 2.447, 7: 2.365, 8: 2.306, 9: 2.262, 10: 2.228,
+                 12: 2.179, 15: 2.131, 20: 2.086, 30: 2.042, 60: 2.000}
+        for k in sorted(table):
+            if df <= k:
+                return table[k]
+        return 1.96
+
+
+def _paired_t_test(ours: np.ndarray, base: np.ndarray) -> Tuple[float, float]:
+    """Paired two-sided t-test on (ours - base). Returns (mean_diff, p).
+
+    The comparison is PAIRED by construction: every method is scored on the same
+    ``--city-seeds``, so pairing removes between-city variance and is both the
+    correct and the more powerful test. Comparing independent CIs instead throws
+    that structure away and understates significance.
+    """
+    d = np.asarray(ours, float) - np.asarray(base, float)
+    d = d[np.isfinite(d)]
+    n = d.size
+    if n < 2:
+        return (float(np.mean(d)) if n else float("nan"), float("nan"))
+    sd = float(np.std(d, ddof=1))
+    mean_d = float(np.mean(d))
+    if sd == 0.0:
+        # Identical every seed -> no difference; a nonzero constant gap is
+        # deterministic separation, reported as p = 0 rather than a divide error.
+        return mean_d, (1.0 if mean_d == 0.0 else 0.0)
+    t_stat = mean_d / (sd / np.sqrt(n))
+    try:
+        from scipy import stats
+        p = float(2.0 * (1.0 - stats.t.cdf(abs(t_stat), n - 1)))
+    except Exception:
+        p = float("nan")
+    return mean_d, p
+
+
+def write_overall_metrics(runs: Sequence[MethodRun], instances,
+                          reference: str = "2d_auto") -> None:
     """Fig. 13 - mean and 95% CI of energy + per-class QoS across realizations.
 
     With a single city realization there is no across-seed spread, so the CI is
     reported as 0.0 rather than invented. Pass several ``--city-seeds`` to get a
     real interval.
+
+    Alongside the summary this now persists the PER-SEED samples and a paired
+    t-test against ``reference``. Storing only (mean, ci95) discarded the pairing
+    and forced any later analysis into a weaker unpaired test that could not be
+    recomputed, because the raw values were gone.
     """
     metric_keys = ["energy", "high", "medium", "low"]
     means = np.zeros((len(runs), len(metric_keys)), float)
     ci95 = np.zeros_like(means)
+    n_seeds = 0
+    per_seed: Dict[str, np.ndarray] = {}
 
     for i, run in enumerate(runs):
         per_city = [class_satisfaction(t, inst)
@@ -371,13 +669,35 @@ def write_overall_metrics(runs: Sequence[MethodRun], instances) -> None:
         }
         for j, key in enumerate(metric_keys):
             values = np.asarray(samples[key], float)
+            per_seed[f"samples_{run.key}_{key}"] = values
+            n_seeds = max(n_seeds, values.size)
             means[i, j] = float(np.nanmean(values))
             if values.size > 1:
                 sem = np.nanstd(values, ddof=1) / np.sqrt(values.size)
-                ci95[i, j] = float(1.96 * sem)
+                ci95[i, j] = float(_t_crit(values.size - 1) * sem)
+
+    # Paired tests vs the reference baseline, same seed set on both sides.
+    method_keys = [r.key for r in runs]
+    pvals = np.full((len(runs), len(metric_keys)), np.nan)
+    if reference in method_keys:
+        for i, mkey in enumerate(method_keys):
+            if mkey == reference:
+                continue
+            for j, key in enumerate(metric_keys):
+                ours = per_seed.get(f"samples_{mkey}_{key}")
+                base = per_seed.get(f"samples_{reference}_{key}")
+                if ours is None or base is None or ours.size != base.size:
+                    continue
+                _, p = _paired_t_test(ours, base)
+                pvals[i, j] = p
+
     _save_npz("overall_metrics.npz",
-              methods=np.array([r.key for r in runs]),
-              metrics=np.array(metric_keys), means=means, ci95=ci95)
+              methods=np.array(method_keys),
+              metrics=np.array(metric_keys), means=means, ci95=ci95,
+              pvalues=pvals, n_seeds=np.asarray(int(n_seeds)),
+              ci_method=np.asarray("student-t two-sided 95%"),
+              paired_reference=np.asarray(reference),
+              **per_seed)
 
 
 def max_achievable_rate(trainer) -> float:
@@ -426,8 +746,11 @@ def write_pareto(trainer, instances, chan, runs: Sequence[MethodRun],
         """(energy Wh, high-QoS %) for one method at one target floor."""
         if run.key == "2d_auto":
             metrics = run_2d_auto(trainer, instance, trainer.fixed_alt)
-        elif run.key == "3d_gnn":
-            metrics = run_blind_3d(trainer, instance, chan)
+        elif run.key == "two_stage":
+            metrics = run_two_stage(trainer, instance, chan)
+        elif run.key == "coupled_greedy":
+            metrics = run_coupled(trainer, instance, chan, strong=False,
+                                  rmin_override=rmin)
         else:
             metrics = run_coupled(trainer, instance, chan,
                                   strong=not fast, rmin_override=rmin)
@@ -439,10 +762,11 @@ def write_pareto(trainer, instances, chan, runs: Sequence[MethodRun],
                 class_satisfaction(trace, instance)["high"])
 
     for run in runs:
-        # 2D-AUTO and Blind-3D never read the QoS floor, so they do not trace a
-        # frontier at all: they are a single operating point. Evaluating them
-        # once is both honest and much cheaper than re-running them per scale.
-        responds_to_floor = run.key == "atom3d"
+        # 2D-AUTO never reads the QoS floor, so it does not trace a frontier at
+        # all: it is a single operating point. Evaluating it once is both honest
+        # and much cheaper than re-running it per scale. The coupled family and
+        # two-stage DO consume the floor, so each traces its own curve.
+        responds_to_floor = run.key in ("atom3d", "coupled_greedy", "two_stage")
         if not responds_to_floor:
             energy, satisfaction = evaluate(run, base_rmin)
             curves[run.key] = {"energy": [energy], "satisfaction": [satisfaction],
@@ -551,6 +875,27 @@ def main() -> None:
     # floor at h_safe); write_pareto drops anything above it anyway.
     ap.add_argument("--pareto-scales", default="0.0,0.25,0.5,0.75,1.0,1.15")
     ap.add_argument("--skip-pareto", action="store_true")
+    ap.add_argument("--energy-budget-kj", type=float, default=None,
+                    help="mission energy budget B (kJ). Without it the run is "
+                         "serve-all, under which every feasible plan scores "
+                         "100%% QoS by construction; with it each method spends "
+                         "~B and they are compared on the QoS that budget buys.")
+    ap.add_argument("--budget-frac-of-2d", type=float, default=None,
+                    help="set B as this fraction of the energy 2D-AUTO needs to "
+                         "cover the whole city, e.g. 0.75. Derives the budget "
+                         "from the baseline instead of a hand-picked constant, "
+                         "so the operating point is stated as a rule.")
+    ap.add_argument("--learned-atom3d", default=None, metavar="CKPT",
+                    help="use a TRAINED policy checkpoint for the 'atom3d' slot "
+                         "instead of the deterministic coupled planner. The slot "
+                         "label and labels.json are updated to say so.")
+    ap.add_argument("--hover-cache", default=None,
+                    help="pickle path for built hover plans; reused when the "
+                         "seed/planner/altitude are unchanged, so budget and "
+                         "figure iterations skip the ~23 min Strong-Coupled plan")
+    ap.add_argument("--priority-schedule", action="store_true",
+                    help="serve the critical class first under budget "
+                         "(secondary result; see apply_budget)")
     args = ap.parse_args()
 
     params = yaml.safe_load(open(os.path.abspath(args.config)))
@@ -561,7 +906,11 @@ def main() -> None:
     scales = [float(s) for s in args.pareto_scales.split(",") if s.strip()]
 
     print(f"[export] city realizations: {seeds}")
-    instances = build_instances_for_seeds(seeds)
+    # The recalibrated floors must reach the INSTANCES too, not just the
+    # scorer's class masks: satisfaction is measured against each node's own
+    # node_rmin, so leaving the pickle's floors here would score against one
+    # set of floors while planning against another.
+    instances = build_instances_for_seeds(seeds, class_floors=CITY_CLASS_FLOORS)
     print(f"[export] classes: {class_counts(instances[0])}")
 
     trainer = build_trainer(params, instances[0])
@@ -570,10 +919,20 @@ def main() -> None:
     # 2D-AUTO cruise altitude: the lowest that clears the tallest structure with
     # the spec's safety margin. Derived from the city, not hard-coded, so it
     # adapts if the environment changes.
-    tallest = max(float(i.node_features[0, :, 2].max()) for i in instances)
-    two_d_alt = tallest + trainer.h_safe
-    print(f"[export] 2D cruise altitude = {two_d_alt:.1f} m "
-          f"(tallest structure {tallest:.1f} m + h_safe {trainer.h_safe:.0f} m)")
+    #
+    # PER REALIZATION, not a single altitude across all of them. Each seed is an
+    # independent city, so a 2D system deployed there clears THAT skyline; using
+    # the global maximum would make every city pay for the tallest building in
+    # any of them. It is not a large difference here (37.4-39.6 m) but it is
+    # free, and it costs the baseline real QoS: at seed 42 the own-city 47.4 m
+    # meets the critical floor for 8% of high-priority nodes while the global
+    # 49.6 m meets it for 0%.
+    two_d_alts = [float(i.node_features[0, :, 2].max()) + trainer.h_safe
+                  for i in instances]
+    two_d_alt = two_d_alts[0]          # canonical scene, used for labels/budget
+    print("[export] 2D cruise altitude per seed: "
+          + ", ".join(f"{s}:{a:.1f} m" for s, a in zip(seeds, two_d_alts))
+          + f" (tallest structure + h_safe {trainer.h_safe:.0f} m)")
     trainer.fixed_alt = two_d_alt
 
     coupled_label = ("Coupled-Greedy (deterministic)" if args.fast
@@ -581,29 +940,80 @@ def main() -> None:
     runs = [
         MethodRun("2d_auto", f"2D-AUTO ({two_d_alt:.0f} m)",
                   "per-node NN+2-opt tour at a fixed altitude"),
-        MethodRun("3d_gnn", "Blind-3D (greedy cover)",
-                  "QoS-blind greedy footprint cover; NOT a trained GNN policy"),
-        MethodRun("atom3d", coupled_label,
+        MethodRun("two_stage", "Two-Stage (decoupled)",
+                  "QoS-blind cover, then shallow repair hovers; the standard "
+                  "decoupled approach this paper's coupling is measured against"),
+        MethodRun("coupled_greedy", "Coupled-Greedy (ablation)",
+                  "QoS-aware coupled planner WITHOUT the local search; an "
+                  "ablation of the proposed method, not an independent baseline"),
+        MethodRun("atom3d",
+                  "ATOM-3D-VoI (learned CMDP)" if args.learned_atom3d else coupled_label,
+                  f"trained CMDP policy from {args.learned_atom3d}"
+                  if args.learned_atom3d else
                   "QoS-aware coupled planner; NOT the trained CMDP policy"),
     ]
+    if args.learned_atom3d:
+        print(f"[export] slot 'atom3d' = TRAINED policy {args.learned_atom3d}")
     for key, tag in LEARNED_CHECKPOINTS.items():
+        if key == "atom3d" and args.learned_atom3d:
+            continue
         ckpt = Path(params["paths"]["checkpoint_dir"]) / f"{tag}.pt"
         if ckpt.exists():
-            print(f"[export] NOTE: {ckpt} exists - slot '{key}' can be upgraded "
-                  f"to the learned policy (not yet wired; deterministic used).")
+            print(f"[export] NOTE: {ckpt} exists but is NOT used for slot '{key}'. "
+                  f"Checkpoints trained before the altitude head became "
+                  f"anchor-conditioned are invalid (constant H, 0% high-priority "
+                  f"QoS) and the trainer now refuses to load them; a deterministic "
+                  f"planner is used until a retrained policy exists.")
+
+    budget_j = None if args.energy_budget_kj is None else args.energy_budget_kj * 1e3
+    if args.budget_frac_of_2d is not None:
+        # State the operating point as a rule tied to the baseline's own cost,
+        # rather than a constant chosen after seeing the outcome.
+        apply_city_depot(trainer, instances[0])
+        full_2d = _score_hovers(trainer, instances[0],
+                                hovers_2d_auto(instances[0], two_d_alt))
+        base_j = float(full_2d["energy"][0])
+        budget_j = args.budget_frac_of_2d * base_j
+        args.energy_budget_kj = budget_j / 1e3
+        print(f"[export] B = {args.budget_frac_of_2d:.2f} x 2D-AUTO's full-city cost "
+              f"({base_j/1e3:.1f} kJ) = {budget_j/1e3:.1f} kJ")
+    if budget_j is not None:
+        print(f"[export] BUDGET mode: B = {args.energy_budget_kj:.0f} kJ per mission "
+              f"(Q4/Q6). Every method flies until B is spent, so energy is "
+              f"comparable by construction and QoS is the comparison.")
 
     for idx, instance in enumerate(instances):
         apply_city_depot(trainer, instance)
+        # The scorer fills any unspecified hover altitude from fixed_alt, so it
+        # has to track this realization's own cruise altitude too.
+        trainer.fixed_alt = two_d_alts[idx]
         print(f"[export] city seed {seeds[idx]} ...")
-        t0 = time.time()
-        runs[0].metrics.append(run_2d_auto(trainer, instance, two_d_alt))
-        print(f"    2D-AUTO        {time.time() - t0:6.1f}s")
-        t0 = time.time()
-        runs[1].metrics.append(run_blind_3d(trainer, instance, chan))
-        print(f"    Blind-3D       {time.time() - t0:6.1f}s")
-        t0 = time.time()
-        runs[2].metrics.append(run_coupled(trainer, instance, chan, strong=not args.fast))
-        print(f"    {coupled_label.split(' (')[0]:14s} {time.time() - t0:6.1f}s")
+        # The cache key must change when the plan's producer changes, or a
+        # deterministic plan would be silently reused for a learned run.
+        strength = (f"learned:{os.path.basename(args.learned_atom3d)}"
+                    if args.learned_atom3d else ("fast" if args.fast else "strong"))
+        planners = (
+            ("2d_auto", lambda: hovers_2d_auto(instance, two_d_alts[idx])),
+            ("two_stage", lambda: hovers_two_stage(trainer, instance, chan)),
+            ("coupled_greedy", lambda: hovers_coupled(trainer, instance, chan,
+                                                      strong=False)),
+            ("atom3d", (lambda: hovers_learned(trainer, instance,
+                                               args.learned_atom3d, params))
+                       if args.learned_atom3d else
+                       (lambda: hovers_coupled(trainer, instance, chan,
+                                               strong=not args.fast))),
+        )
+        for run, (key, build) in zip(runs, planners):
+            t0 = time.time()
+            hovers = cached_hovers(
+                args.hover_cache,
+                (key, seeds[idx], strength, round(float(two_d_alts[idx]), 3)), build)
+            metrics = (_score_hovers(trainer, instance, hovers) if budget_j is None
+                       else apply_budget(trainer, instance, key, hovers, chan,
+                                         budget_j,
+                                         priority_schedule=args.priority_schedule))
+            run.metrics.append(metrics)
+            print(f"    {key:8s}       {time.time() - t0:6.1f}s")
         for run in runs:
             run.traces.append(run.metrics[-1]["trace"][0])
 
@@ -627,13 +1037,29 @@ def main() -> None:
     if not args.skip_pareto:
         apply_city_depot(trainer, instances[0])
         write_pareto(trainer, instances, chan, runs, scales, args.fast)
+    regime = ("budget-constrained (Q4/Q6): every method flies until the mission "
+              f"energy budget B = {args.energy_budget_kj:.0f} kJ is spent, so energy is "
+              "comparable by construction and the comparison is the QoS that "
+              "budget buys. QoS below 100% means the budget ran out, not that a "
+              "constraint was violated."
+              if budget_j is not None else
+              "serve-all with per-class QoS as HARD constraints: every feasible "
+              "plan scores 100% on every class BY CONSTRUCTION, so QoS carries "
+              "no comparative information in this regime.")
     write_labels(runs, extra={
         "city_seeds": seeds,
-        "two_d_altitude_m": two_d_alt,
-        "note": ("Deterministic planners on the frozen synthetic city. Slots "
-                 "'3d_gnn' and 'atom3d' are NOT learned policies yet - see "
-                 "each slot's 'source'. training_log.npz and dual_variables.npz "
-                 "are intentionally absent until a real CMDP run produces them."),
+        "two_d_altitude_m": two_d_alt,          # canonical scene (first seed)
+        "two_d_altitude_m_per_seed": {str(s): a for s, a in zip(seeds, two_d_alts)},
+        "energy_budget_kj": args.energy_budget_kj,
+        "regime": regime,
+        # Figures label their axes from this rather than hardcoding numbers, so
+        # a recalibration cannot leave a figure captioned with stale floors.
+        "class_floors_bps": dict(CITY_CLASS_FLOORS),
+        "note": ("Deterministic planners on the frozen synthetic city. No slot "
+                 "holds a learned policy - see each slot's 'source'. "
+                 "'two_stage' is the baseline the contribution is measured "
+                 "against; 'coupled_greedy' is an ablation of 'atom3d', not an "
+                 "independent method."),
     })
     print("\n[export] done. Figures 3, 5, 6, 7, 8, 9, 10, 13 now load real data.")
     print("         Figures 4, 11, 12 keep their PLACEHOLDER stamp (need training).")

@@ -12,10 +12,12 @@ metrics). Two panels plus a workflow ribbon:
       profile, coverage cone and communication links overlaid. Side elevation
       is used because altitude adaptation is far clearer than in 3D.
 
-  (b) The learning method as a Constrained MDP, mirroring the actual
-      architecture: State -> Graph Encoder (multi-head self-attention) ->
-      Trajectory Decoder -> Altitude Head -> CMDP constraint layer -> Action
-      -> Environment -> Reward -> Policy Update.
+  (b) The deterministic coupled planner that produced every number in the
+      manuscript: instance -> QoS floor to reach d_max -> greedy coupled cover
+      -> continuous-altitude solve -> local search -> route and fly, with a
+      feasibility/accept loop back into the local search. It mirrors
+      experiments/strong_coupled.plan_coupled_strong. NOT a learned policy:
+      PAPER_STORY.md claims no reinforcement learning anywhere.
 
 Runs independently:  python figure02_method_overview.py
 Exports results/figure02_method_overview.png (600 DPI) via common_plot.
@@ -165,7 +167,7 @@ def draw_mechanism_panel(ax, city):
 
     ax.set_xlim(x_lo, x_hi)
     ax.set_ylim(0, Z_TOP)
-    ax.set_xlabel("Mission Progress")
+    ax.set_xlabel("x (m)")          # district easting, not mission progress
     ax.set_ylabel("altitude (m)")
     ax.set_title("Priority-aware adaptive-altitude data collection\n"
                  f"({FOCUS_DISTRICT} district of the Fig. 1 city)", fontsize=9)
@@ -205,35 +207,47 @@ def _arrow(ax, p_from, p_to, *, rad=0.0, label=None, color=ARROW_COLOR):
 
 
 def draw_cmdp_panel(ax):
-    """Constrained-MDP block diagram reflecting the ATOM-3D-VoI architecture."""
+    """Block diagram of the deterministic coupled planner that produced the results.
+
+    This panel used to draw a primal-dual actor-critic CMDP: Graph Encoder ->
+    Trajectory Decoder -> Gaussian Altitude Head -> Lagrangian layer, with a
+    gradient/dual learning loop. No such policy produces any number in this
+    manuscript - PAPER_STORY.md states that no reinforcement learning is
+    claimed anywhere, and every results figure is fed by the deterministic
+    planners in results_data/. The blocks below mirror the pipeline actually
+    run, ``experiments/strong_coupled.plan_coupled_strong`` (invoked by
+    ``export_figure_data.hovers_coupled`` with restarts=1), whose stages are
+    named in that module's own docstring.
+    """
     ax.set_xlim(0, 1)
     ax.set_ylim(0, 1)
     ax.axis("off")
 
-    # Objective banner.
+    # Objective banner. Deterministic: no expectation over a policy.
     ax.text(0.5, 0.985,
-            r"maximize  $E\!\left[\sum_i w_i D_i\,\mathbf{1}[\mathrm{QoS}]\right]$"
-            r"   s.t.  per-class QoS satisfied,  energy $\leq E_{\max}$",
+            r"maximize  $\sum_i w_i D_i\,\mathbf{1}[\mathrm{QoS}]$"
+            r"   s.t.  rate$_i \geq R_{\min}(\mathrm{class}_i)$,  energy $\leq B$",
             ha="center", va="top", fontsize=7.6,
             bbox=dict(boxstyle="round,pad=0.35", fc="#FFFDF3", ec="#C9B458"))
 
     bw, bh = 0.42, 0.092
-    lx = 0.27                     # left column (policy) centre
-    rx = 0.75                     # right column (environment loop) centre
+    lx = 0.27                     # left column (planner) centre
+    rx = 0.75                     # right column (evaluation loop) centre
 
-    # Left column: State -> Encoder -> Decoder -> Altitude Head -> CMDP -> Action
+    # Left column: the planner stages, in the order the code runs them.
     left = [
-        ("State  $s_t$\nnode graph: $x_i, z_i$, priority $w_i$, demand $D_i$;\n"
-         "remaining battery", STATE_FILL, STATE_EDGE, False),
-        ("Graph Encoder\nmulti-head self-attention ($\\times L$)",
+        ("Problem instance\nnode graph: $x_i, z_i$, priority $w_i$, demand $D_i$;\n"
+         "per-class floor $R_{\\min}$, budget $B$", STATE_FILL, STATE_EDGE, False),
+        ("QoS floor $\\rightarrow$ reach\n$d_{\\max}(R_{\\min})$ from the LoS channel",
          METHOD_FILL, METHOD_EDGE, True),
-        ("Trajectory Decoder\npointer attention $\\rightarrow$ next anchor",
+        ("Greedy coupled cover\nanchor + altitude per cluster (feasible)",
          METHOD_FILL, METHOD_EDGE, True),
-        ("Altitude Head\nGaussian $H \\in [H_{\\min}, H_{\\max}]$",
+        ("Continuous-altitude solve\nlowest $H$ covering the cluster;\n"
+         "anchor minimising hover energy", METHOD_FILL, METHOD_EDGE, True),
+        ("Local search\nnode reassignment + cluster merges",
          METHOD_FILL, METHOD_EDGE, True),
-        ("CMDP Constraint Layer\nper-class QoS Lagrangian duals $\\lambda$",
-         METHOD_FILL, METHOD_EDGE, True),
-        ("Action  $a_t$\n(next node, altitude $H$)", ACTION_FILL, ACTION_EDGE, True),
+        ("Route + fly\nNN + 2-opt + Or-opt; until $B$ spent",
+         ACTION_FILL, ACTION_EDGE, True),
     ]
     ys = np.linspace(0.87, 0.10, len(left))
     boxes = [_box(ax, lx, y, bw, bh, t, f, e, bold_title=b)
@@ -241,30 +255,31 @@ def draw_cmdp_panel(ax):
     for a, c in zip(boxes[:-1], boxes[1:]):        # downward arrows
         _arrow(ax, (a["cx"], a["cy"] - bh / 2), (c["cx"], c["cy"] + bh / 2))
 
-    # Right column: Environment -> Reward -> Policy Update (upward loop).
+    # Right column: score the plan, then loop back into the local search. The
+    # loop is a search over plans, not a parameter update.
     env = _box(ax, rx, ys[-1], bw, bh,
                "Wireless Environment\nLoS Channel  ·  Rotary-wing Energy\n"
                "Footprint Coverage", ENV_FILL, ENV_EDGE)
     reward = _box(ax, rx, 0.40, bw, bh,
-                  r"Reward  $r_t=\sum_i w_i D_i\cdot 1[\mathrm{QoS}]$"
-                  "\n" r"$\mathbf{Cost\ Constraint}$: energy $\leq E_{\max}$",
+                  "Feasibility check\n"
+                  r"rate$_i \geq R_{\min}$,  in cone,  $\tau \leq \tau_{\max}$",
                   REWARD_FILL, REWARD_EDGE)
     update = _box(ax, rx, 0.66, bw, bh,
-                  "Policy Update\nprimal-dual actor-critic\n(critic baseline, dual ascent)",
+                  "Keep the cheaper feasible plan\n(one energy accounting for all methods)",
                   UPDATE_FILL, UPDATE_EDGE)
 
     action = boxes[-1]
     _arrow(ax, (action["cx"] + bw / 2, action["cy"]),
-           (env["cx"] - bw / 2, env["cy"]), label="execute")
+           (env["cx"] - bw / 2, env["cy"]), label="score")
     _arrow(ax, (env["cx"], env["cy"] + bh / 2), (reward["cx"], reward["cy"] - bh / 2))
     _arrow(ax, (reward["cx"], reward["cy"] + bh / 2),
            (update["cx"], update["cy"] - bh / 2))
-    # Learning loop back to the encoder.
+    # Search loop back into the local search - no gradients, no duals.
     _arrow(ax, (update["cx"] - bw / 2, update["cy"]),
-           (boxes[1]["cx"] + bw / 2, boxes[1]["cy"]),
-           rad=-0.32, label="gradient / dual update", color=UPDATE_EDGE)
+           (boxes[4]["cx"] + bw / 2, boxes[4]["cy"]),
+           rad=-0.32, label="improving move", color=UPDATE_EDGE)
 
-    ax.set_title("ATOM-3D-VoI as a Constrained MDP", fontsize=9)
+    ax.set_title("ATOM-3D-VoI as a deterministic coupled planner", fontsize=9)
 
 
 # =============================================================================

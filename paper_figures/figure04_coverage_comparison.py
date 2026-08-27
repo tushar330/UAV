@@ -39,7 +39,8 @@ import matplotlib.patches as mpatches
 
 from common_style import setup_style, COLORS
 from common_plot import (
-    save_figure, draw_buildings, draw_nodes, draw_coverage_cone,
+    save_figure, stamp_placeholder,
+    draw_buildings, draw_nodes, draw_coverage_cone,
     priority_color, PRIORITY_LABELS,
 )
 from synthetic_city import get_city
@@ -206,6 +207,8 @@ def main():
     city = get_city()
     specs, _tan = generate_placeholder_coverage_specs()
     fig = make_figure(city, specs)
+    # Pure synthetic specs - CLAUDE.md requires the stamp.
+    stamp_placeholder(fig, "cut from the manuscript - see FIGURE_LIST.md")
     save_figure(fig, FIG_NAME)
     plt.close(fig)
 
