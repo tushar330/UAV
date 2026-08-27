@@ -16,3 +16,9 @@ results_data_cache/
 *.mtc*
 *.maf
 *.synctex.gz
+
+# MS Office owner-lock files
+~$*
+# Downsampled figure cache for the viva DOCX builder (regenerable)
+tools/viva_docx/.figcache/
+tools/viva_docx/node_modules/
